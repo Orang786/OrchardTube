@@ -1,0 +1,20 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: orchardtube
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: MONGODB_URI        # строка подключения MongoDB Atlas — задать в панели Render
+        sync: false
+      - key: MONGODB_DB
+        value: orchardtube
+      - key: UPLOAD_TOKEN       # ключ для загрузки/удаления видео (сгенерируется автоматически)
+        generateValue: true
+      - key: MAX_UPLOAD_MB
+        value: 100
