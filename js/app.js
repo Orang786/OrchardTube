@@ -128,7 +128,8 @@
   function thumbArt(v) {
     if (v.thumb) {
       return `<div class="thumb-art has-img" style="background:linear-gradient(135deg, ${v.g1}, ${v.g2})">
-      <img class="thumb-img" src="${esc(v.thumb)}" alt="" loading="lazy">`;
+      <img class="thumb-img" src="${esc(v.thumb)}" alt="" loading="lazy">
+    </div>`;
     }
     return `<div class="thumb-art" style="background:linear-gradient(135deg, ${v.g1}, ${v.g2})">
       <span class="thumb-emoji">${v.emoji}</span>
