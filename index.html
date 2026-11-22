@@ -6,8 +6,8 @@
 <title>OrchardTube</title>
 <meta name="description" content="OrchardTube — видеоплатформа с оранжевым характером.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23ff6b00'/%3E%3Cpath d='M13 9.5v13l10-6.5z' fill='white'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="css/styles.css?v=26">
-<script src="js/icons.js?v=26"></script>
+<link rel="stylesheet" href="css/styles.css?v=27">
+<script src="js/icons.js?v=27"></script>
 </head>
 <body>
 
@@ -32,9 +32,6 @@
     <button class="icon-btn search-btn" type="submit" aria-label="Найти" title="Найти">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
     </button>
-    <button class="icon-btn mic" type="button" id="micBtn" aria-label="Поиск голосом" title="Поиск голосом">
-      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="11.5" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7"/></svg>
-    </button>
   </form>
 
   <div class="topbar-right">
@@ -42,32 +39,26 @@
       <svg class="ic"><use href="#i-plus"/></svg><span>Создать</span>
     </button>
     <button class="icon-btn bell" id="bellBtn" aria-label="Уведомления">
-      <svg class="ic"><use href="#i-bell"/></svg><span class="badge">3</span>
+      <svg class="ic"><use href="#i-bell"/></svg>
     </button>
-    <button class="avatar-btn" id="avatarBtn" aria-label="Аккаунт">В</button>
+    <button class="pill-btn login-btn" id="loginBtn">Войти</button>
+    <button class="avatar-btn" id="avatarBtn" aria-label="Аккаунт" hidden></button>
   </div>
 </header>
 
 <aside class="sidebar" id="sidebar" aria-label="Навигация">
   <nav class="side-scroll">
     <a class="side-item" href="#/" data-nav="home"><svg class="ic"><use href="#i-home"/></svg><span>Главная</span></a>
-    <a class="side-item" href="#/shorts" data-nav="shorts"><svg class="ic"><use href="#i-shorts"/></svg><span>Shorts</span></a>
     <a class="side-item" href="#/subs" data-nav="subs"><svg class="ic"><use href="#i-subs"/></svg><span>Подписки</span></a>
     <div class="side-divider"></div>
-    <a class="side-item" href="#/library" data-nav="library"><svg class="ic"><use href="#i-library"/></svg><span>Библиотека</span></a>
     <a class="side-item" href="#/history" data-nav="history"><svg class="ic"><use href="#i-history"/></svg><span>История</span></a>
     <a class="side-item" href="#/my-videos" data-nav="my"><svg class="ic"><use href="#i-film"/></svg><span>Ваши видео</span></a>
     <a class="side-item" href="#/watch-later" data-nav="later"><svg class="ic"><use href="#i-clock"/></svg><span>Смотреть позже</span></a>
     <a class="side-item" href="#/liked" data-nav="liked"><svg class="ic"><use href="#i-thumb-up"/></svg><span>Понравившиеся</span></a>
     <div class="side-divider"></div>
-    <div class="side-title">Подписки</div>
+    <div class="side-title side-subs-only" hidden>Подписки</div>
     <div id="sideChannels" class="side-channels"></div>
-    <div class="side-divider"></div>
-    <div class="side-title">Ещё от Orchard</div>
-    <a class="side-item" href="#/premium" data-nav="premium"><span class="mini-mark">OT</span><span>OrchardTube Premium</span></a>
-    <a class="side-item" href="#/music" data-nav="music"><svg class="ic"><use href="#i-music"/></svg><span>Orchard Music</span></a>
-    <a class="side-item" href="#/kids" data-nav="kids"><svg class="ic"><use href="#i-gamepad"/></svg><span>Orchard Детям</span></a>
-    <div class="side-divider"></div>
+    <div class="side-divider side-subs-only" hidden></div>
     <button class="side-item side-action" id="themeBtn">
       <svg class="ic" id="themeIcon"><use href="#i-sun"/></svg><span id="themeLabel">Светлая тема</span>
     </button>
@@ -90,7 +81,6 @@
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="js/data.js?v=26"></script>
-<script src="js/app.js?v=26"></script>
+<script src="js/app.js?v=27"></script>
 </body>
 </html>

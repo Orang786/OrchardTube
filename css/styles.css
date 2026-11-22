@@ -1561,3 +1561,9 @@ html[data-theme="light"] .chip:hover { background: #e5e5e5; }
 .chip-danger { color: #ff5a4d; cursor: pointer; border: 1px solid rgba(255,90,77,.45); background: transparent; }
 .chip-danger:hover { background: rgba(255,90,77,.12); }
 .boot-note { padding: 80px 24px; text-align: center; color: var(--fg-mute); }
+
+[hidden] { display: none !important; }
+.login-btn { background: var(--orange, #ff6b00); color: #fff; font-weight: 600; }
+.gsi-box { min-height: 44px; display: flex; justify-content: center; margin: 18px 0 10px; }
+.muted-note { color: var(--fg-dim); font-size: 14px; padding: 12px 0; }
+.boot-note small { opacity: .7; }

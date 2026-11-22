@@ -12,23 +12,10 @@
   const backdrop = $('#modalBackdrop');
   const modalEl = $('#modal');
 
-  const CHIP_CATS = ['Все', 'Технологии', 'Музыка', 'Игры', 'Новости', 'Обучение', 'Спорт', 'Дизайн', 'Путешествия', 'Еда', 'Юмор', 'Прямые трансляции'];
-
-  const PLAYLISTS = [
-    { id: 'pl-1', title: 'Смотреть позже', ids: ['react-20', 'cosmos', 'iceland', 'algo'], emoji: '⏱️', g1: '#ffd8a8', g2: '#d9480f', note: 'Приватный плейлист' },
-    { id: 'pl-2', title: 'Код и разработка', ids: ['youtube-js', 'react-20', 'algo', 'setup-2026'], emoji: '💻', g1: '#7cb8ff', g2: '#1d4ed8', note: '4 видео' },
-    { id: 'pl-3', title: 'Фон для работы', ids: ['lofi-3h', 'dawn-orchard', 'cosmos'], emoji: '🎧', g1: '#a5b4fc', g2: '#3730a3', note: '3 видео' },
-    { id: 'pl-4', title: 'Выходные в горах', ids: ['iceland', 'marathon', 'morning-yoga'], emoji: '🏔️', g1: '#a5d8f0', g2: '#075985', note: 'Публичный плейлист' }
-  ];
-
-  const NOTIFS = [
-    { ch: 'orchardtech', emoji: '💻', title: 'Новое видео: «Как мы построили OrchardTube за выходные»', ago: '2 часа назад' },
-    { ch: 'codegarden', emoji: '⚛️', title: 'Премьера через 30 минут: «Пишем свой YouTube на JavaScript»', ago: '5 часов назад' },
-    { ch: 'naturevibes', emoji: '🌅', title: 'Добавлено в плейлист «Утро»: рассвет над садами', ago: '1 день назад' }
-  ];
+  const CHIP_CATS = ['Все', 'Технологии', 'Музыка', 'Игры', 'Новости', 'Обучение', 'Спорт', 'Дизайн', 'Путешествия', 'Еда', 'Юмор'];
 
   /* ---------------- состояние ---------------- */
-  const KEY = 'orchardtube.v1';
+  const KEY = 'orchardtube.v2';
 
   function loadState() {
     try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
@@ -36,37 +23,32 @@
 
   const saved = loadState();
 
+  // Только то, что живёт в браузере: тема, «смотреть позже», история, дизлайки.
+  // Лайки и подписки хранятся на сервере и приходят из /api/me.
   const state = {
     theme: saved.theme || 'dark',
-    subs: new Set(saved.subs || ['orchardtech', 'naturevibes', 'codegarden']),
-    likes: new Set(saved.likes || []),
+    subs: new Set(),
+    likes: new Set(),
     dislikes: new Set(saved.dislikes || []),
-    later: new Set(saved.later || ['react-20', 'cosmos']),
-    history: Array.isArray(saved.history) ? saved.history : ['dawn-orchard', 'youtube-js'],
-    comments: saved.comments || {},
-    premium: saved.premium || null,
-    premiumPeriod: saved.premiumPeriod || 'm',
+    later: new Set(saved.later || []),
+    history: Array.isArray(saved.history) ? saved.history : [],
     filter: 'Все',
-    hidden: new Set(),
-    uploadToken: saved.uploadToken || ''
+    hidden: new Set()
   };
-  // Состояние серверного API: db — работает ли MongoDB, upload — можно ли грузить видео
-  const api = { online: false, db: false, upload: false, tokenRequired: false, maxMb: 0 };
-  const commentLiked = new Set();
+  // Данные приходят с сервера
+  const VIDEOS = [];
+  const CHANNELS = {};
+  const commentsCache = {};
+  let me = null; // { user, channel, likes, subs } или null, если не вошли
+  const api = { online: false, googleClientId: '', maxMb: 0 };
 
   function saveState() {
     try {
       localStorage.setItem(KEY, JSON.stringify({
         theme: state.theme,
-        subs: [...state.subs],
-        likes: [...state.likes],
         dislikes: [...state.dislikes],
         later: [...state.later],
-        history: state.history,
-        comments: state.comments,
-        premium: state.premium,
-        premiumPeriod: state.premiumPeriod,
-        uploadToken: state.uploadToken
+        history: state.history
       }));
     } catch (e) { /* приватный режим — просто живём без сохранения */ }
   }
@@ -103,39 +85,43 @@
     } finally { clearTimeout(t); }
   }
 
-  // Подтягиваем данные с сервера. Любая ошибка (file://, нет сети, сервер спит) — работаем на data.js
+  const jsonPost = (url, body, method = 'POST', timeout = 15000) =>
+    apiFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }, timeout);
+
+  const initialsOf = (name) => {
+    const w = String(name || '?').trim().split(/\s+/).filter(Boolean);
+    return ((w[0] ? w[0][0] : '?') + (w.length > 1 ? w[1][0] : '')).toUpperCase().slice(0, 2);
+  };
+
+  function applyMe(data) {
+    me = data && data.user ? data : null;
+    state.likes = new Set(me ? me.likes : []);
+    state.subs = new Set(me ? me.subs : []);
+    if (me && me.channel) CHANNELS[me.channel.id] = me.channel;
+  }
+
+  // Бесплатный сервер на Render просыпается до минуты — ждём, но честно показываем это в интерфейсе
   async function loadRemote() {
-    if (!/^https?:$/.test(location.protocol)) return;
     try {
-      const h = await apiFetch('/api/health', {}, 4000);
-      if (!h.ok || !h.data) return;
+      const [cfg, boot, who] = await Promise.all([
+        apiFetch('/api/config', {}, 70000),
+        apiFetch('/api/bootstrap', {}, 70000),
+        apiFetch('/api/me', {}, 70000)
+      ]);
+      if (!boot.ok || !boot.data || !cfg.data) throw new Error('bad response');
       api.online = true;
-      api.upload = !!h.data.upload;
-      api.tokenRequired = !!h.data.uploadTokenRequired;
-      api.maxMb = h.data.maxUploadMb || 0;
-      if (h.data.db !== 'mongodb') return; // демо-режим: данные те же, что в data.js
-      const b = await apiFetch('/api/bootstrap', {}, 8000);
-      if (!b.ok || !b.data || b.data.source !== 'mongodb') return;
-      api.db = true;
-      // data.js объявляет const-массивы — подменяем содержимое на месте
-      VIDEOS.splice(0, VIDEOS.length, ...b.data.VIDEOS);
-      SHORTS.splice(0, SHORTS.length, ...b.data.SHORTS);
-      COMMENTS.splice(0, COMMENTS.length, ...b.data.COMMENTS);
+      api.googleClientId = cfg.data.googleClientId || '';
+      api.maxMb = cfg.data.maxUploadMb || 0;
+      VIDEOS.splice(0, VIDEOS.length, ...boot.data.VIDEOS);
       Object.keys(CHANNELS).forEach((k) => delete CHANNELS[k]);
-      Object.assign(CHANNELS, b.data.CHANNELS);
-      // Мой лайк уже учтён в счётчике сервера, а интерфейс прибавляет его сам — вычитаем, чтобы не считать дважды
-      VIDEOS.forEach((v) => { if (state.likes.has(v.id) && v.likes > 0) v.likes -= 1; });
+      Object.assign(CHANNELS, boot.data.CHANNELS);
+      applyMe(who.data);
     } catch (e) {
-      console.warn('[api] недоступен, работаем на демо-данных:', e.message);
+      api.online = false;
     }
   }
 
-  // Отправка счётчиков (лайки/подписки/просмотры) — «выстрелил и забыл», UI от неё не зависит
-  function post(url, body) {
-    if (!api.db) return;
-    apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }, 8000).catch(() => {});
-  }
-  function chOf(v) { return CHANNELS[v.channel]; }
+  function chOf(v) { return CHANNELS[v.channel] || { name: 'Канал удалён', avatar: '?', color: '#777', subs: '0', id: v.channel }; }
   function avatarHtml(ch, size) {
     return `<span class="ch-avatar" style="background:${ch.color};${size ? `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px` : ''}">${esc(ch.avatar)}</span>`;
   }
@@ -150,13 +136,9 @@
     </div>`;
   }
   function durBadge(v) {
-    if (v.live) return `<span class="thumb-duration live">В эфире</span>`;
-    return `<span class="thumb-duration">${v.duration}</span>`;
+    return `<span class="thumb-duration">${esc(v.duration)}</span>`;
   }
-  function progressBar(v) {
-    if (!v.watched || !state.history.includes(v.id)) return '';
-    return `<div class="thumb-progress"><i style="width:${Math.round(v.watched * 100)}%"></i></div>`;
-  }
+  function progressBar() { return ''; }
 
   /* ---------------- карточки ---------------- */
   function videoCard(v) {
@@ -170,7 +152,6 @@
         ${progressBar(v)}
         <div class="thumb-actions">
           <button class="thumb-act" data-act="later" data-id="${v.id}" title="Смотреть позже" aria-label="Смотреть позже"><svg class="ic"><use href="#i-clock"/></svg></button>
-          <button class="thumb-act" data-act="queue" data-id="${v.id}" title="Добавить в очередь" aria-label="Добавить в очередь"><svg class="ic"><use href="#i-save"/></svg></button>
         </div>
       </a>
       <div class="card-body">
@@ -229,19 +210,6 @@
     </article>`;
   }
 
-  function shortCard(s) {
-    return `
-    <a class="short-card" href="#/shorts/${s.id}">
-      <div class="short-thumb">
-        <div class="thumb-art" style="background:linear-gradient(160deg, ${s.g1}, ${s.g2})">
-          <span class="thumb-emoji">${s.emoji}</span>
-          <span class="thumb-brand">Shorts</span>
-        </div>
-      </div>
-      <div class="short-title">${esc(s.title)}</div>
-      <div class="short-meta">${s.views} просмотров</div>
-    </a>`;
-  }
 
   /* ---------------- поповеры ---------------- */
   function openPopover(anchor, html, align = 'right') {
@@ -268,12 +236,10 @@
     const v = byId(id);
     if (!v) return;
     openPopover(anchor, `
-      <button class="pop-item" data-act="queue"><svg class="ic"><use href="#i-save"/></svg>Добавить в очередь</button>
       <button class="pop-item" data-act="later"><svg class="ic"><use href="#i-clock"/></svg>${state.later.has(id) ? 'Убрать из «Смотреть позже»' : 'Смотреть позже'}</button>
       <button class="pop-item" data-act="share"><svg class="ic"><use href="#i-link"/></svg>Поделиться</button>
       <div class="pop-sep"></div>
       <button class="pop-item" data-act="hide"><svg class="ic"><use href="#i-close"/></svg>Не интересует</button>
-      <button class="pop-item" data-act="report"><svg class="ic"><use href="#i-flag"/></svg>Пожаловаться</button>
     `);
     $$('#popover .pop-item').forEach((b) => b.addEventListener('click', () => {
       const act = b.dataset.act;
@@ -282,15 +248,11 @@
         toggleLater(id);
       } else if (act === 'share') {
         copyLink(id);
-      } else if (act === 'queue') {
-        toast('Видео добавлено в очередь');
       } else if (act === 'hide') {
         state.hidden.add(id);
         const card = $(`[data-card="${id}"]`);
         if (card) { card.style.opacity = '0'; setTimeout(() => card.remove(), 180); }
         toast('Больше не будем рекомендовать это видео');
-      } else if (act === 'report') {
-        toast('Жалоба отправлена на проверку');
       }
     }));
   }
@@ -381,11 +343,9 @@
   function renderSideChannels() {
     const box = $('#sideChannels');
     if (!box) return;
-    box.innerHTML = [...state.subs].map((id) => {
-      const ch = CHANNELS[id];
-      if (!ch) return '';
-      return `<a class="side-item" href="#/channel/${id}">${avatarHtml(ch)}<span>${esc(ch.name)}</span></a>`;
-    }).join('');
+    const list = [...state.subs].map((id) => CHANNELS[id]).filter(Boolean);
+    box.innerHTML = list.map((ch) => `<a class="side-item" href="#/channel/${ch.id}">${avatarHtml(ch)}<span>${esc(ch.name)}</span></a>`).join('');
+    $$('.side-subs-only').forEach((el) => { el.hidden = !list.length; });
   }
 
   /* ---------------- роутер ---------------- */
@@ -413,95 +373,48 @@
   }
 
   function gridHtml() {
+    if (!VIDEOS.length) {
+      return emptyHtml('🍊', 'Пока нет ни одного видео', 'Станьте первым: войдите через Google, создайте канал и загрузите видео.', { label: 'Загрузить видео', id: 'emptyUpload' });
+    }
     let list = VIDEOS.filter((v) => !state.hidden.has(v.id));
     if (state.filter !== 'Все') list = list.filter((v) => v.category === state.filter);
-    if (!list.length) return emptyHtml('🍊', 'Здесь пока пусто', 'Попробуй выбрать другую категорию — сад ещё растёт.');
+    if (!list.length) return emptyHtml('🍊', 'В этой категории пока пусто', 'Попробуйте другую категорию — или загрузите своё видео.', { label: 'Загрузить видео', id: 'emptyUpload' });
     return list.map(videoCard).join('');
   }
 
-  function shortsStrip() {
-    return `<section class="shorts-strip" id="shortsStrip">
-      <div class="shorts-head">
-        <svg class="ic"><use href="#i-shorts"/></svg>
-        <h2>Shorts</h2>
-        <a class="all" href="#/shorts">Смотреть все</a>
-      </div>
-      <div class="shorts-row">${SHORTS.map(shortCard).join('')}</div>
-    </section>`;
-  }
 
-  function emptyHtml(emoji, title, text) {
+  // action: { label, href } — ссылка, либо { label, id } — кнопка, которую привязывает bindPage
+  function emptyHtml(emoji, title, text, action) {
+    const a = action || { label: 'На главную', href: '#/' };
     return `<div class="empty">
       <div class="empty-emoji">${emoji}</div>
       <h2>${esc(title)}</h2>
       <p>${esc(text)}</p>
-      <a class="btn btn-primary" href="#/">На главную</a>
+      ${a.id ? `<button class="btn btn-primary" id="${a.id}">${esc(a.label)}</button>` : `<a class="btn btn-primary" href="${a.href}">${esc(a.label)}</a>`}
     </div>`;
   }
+
+  const LOGIN_PROMPT = (what) => emptyHtml('🔐', 'Войдите в аккаунт', what, { label: 'Войти через Google', id: 'emptyLogin' });
 
   function pageHome() {
     return `
       ${chipsHtml(state.filter)}
-      <div id="shortsStripWrap">${state.filter === 'Все' ? shortsStrip() : ''}</div>
       <div class="video-grid" id="homeGrid">${gridHtml()}</div>`;
   }
 
-  function pageShorts() {
-    return `
-      <div class="page-head">
-        <h1>Shorts</h1>
-        <p>Короткие вертикальные видео — листай и заряжайся.</p>
-      </div>
-      <div class="shorts-page">${SHORTS.map(shortCard).join('')}</div>`;
-  }
 
   function pageSubs() {
+    if (!me) return LOGIN_PROMPT('Подписывайтесь на каналы — их новые видео появятся здесь.');
     const list = VIDEOS.filter((v) => state.subs.has(v.channel));
     return `
       <div class="page-head">
         <h1>Подписки</h1>
         <p>Свежие видео каналов, на которые вы подписаны.</p>
       </div>
-      ${chipsHtml('Все')}
-      ${list.length ? `<div class="video-grid">${list.map(videoCard).join('')}</div>` : emptyHtml('🌱', 'Пока нет подписок', 'Подпишись на каналы, и здесь появятся их новые видео.')}`;
+      ${list.length ? `<div class="video-grid">${list.map(videoCard).join('')}</div>` : emptyHtml('🌱', 'Пока нет подписок', 'Подпишитесь на каналы, и здесь появятся их новые видео.')}`;
   }
 
-  function pageLibrary() {
-    return `
-      <div class="page-head"><h1>Библиотека</h1><p>Плейлисты, история и сохранённые видео.</p></div>
-      <div class="playlist-grid">
-        ${PLAYLISTS.map((p) => {
-          const v = byId(p.ids[0]);
-          return `<a class="playlist-card" href="#/playlist/${p.id}">
-            <div class="playlist-thumb">
-              <div class="thumb-art" style="background:linear-gradient(135deg, ${p.g1}, ${p.g2})">
-                <span class="thumb-emoji">${p.emoji}</span>
-                <span class="thumb-brand">Плейлист</span>
-              </div>
-              <span class="playlist-stack">${p.ids.length} видео</span>
-              <div class="playlist-play"><span><svg class="ic"><use href="#i-play"/></svg></span></div>
-            </div>
-            <div class="playlist-info">
-              <h3>${esc(p.title)}</h3>
-              <p>${esc(p.note)} · ${v ? esc(chOf(v).name) : ''}</p>
-            </div>
-          </a>`;
-        }).join('')}
-      </div>
-      <div class="section-head" style="margin-top:34px"><svg class="ic"><use href="#i-history"/></svg><h2>Недавние</h2></div>
-      <div class="list-rows">
-        ${state.history.slice(0, 4).map((id) => byId(id)).filter(Boolean).map((v) => rowVideo(v)).join('') || emptyHtml('🕘', 'История пуста', 'Посмотрите что-нибудь — и оно появится здесь.')}
-      </div>`;
-  }
 
-  function pagePlaylist(plId) {
-    const p = PLAYLISTS.find((x) => x.id === plId);
-    if (!p) return emptyHtml('🍊', 'Плейлист не найден', 'Возможно, он был удалён.');
-    const list = p.ids.map(byId).filter(Boolean);
-    return `
-      <div class="page-head"><h1>${esc(p.title)}</h1><p>${list.length} ${plural(list.length, 'видео', 'видео', 'видео')} · ${esc(p.note)}</p></div>
-      <div class="list-rows">${list.map((v) => rowVideo(v)).join('')}</div>`;
-  }
 
   function pageHistory() {
     const list = state.history.map(byId).filter(Boolean);
@@ -516,6 +429,7 @@
   }
 
   function pageLiked() {
+    if (!me) return LOGIN_PROMPT('Лайки привязаны к аккаунту — войдите, чтобы увидеть понравившиеся видео.');
     const list = [...state.likes].map(byId).filter(Boolean);
     return `
       <div class="page-head"><h1>Понравившиеся видео</h1><p>${list.length} ${plural(list.length, 'видео', 'видео', 'видео')}.</p></div>
@@ -532,16 +446,18 @@
   }
 
   function pageMyVideos() {
-    const list = VIDEOS.filter((v) => v.channel === 'orchardtech');
+    if (!me) return LOGIN_PROMPT('Войдите, чтобы создать канал и загружать видео.');
+    if (!me.channel) return emptyHtml('📺', 'У вас пока нет канала', 'Создайте канал — это займёт полминуты.', { label: 'Создать канал', id: 'emptyCreateChannel' });
+    const list = VIDEOS.filter((v) => v.channel === me.channel.id);
     return `
       <div class="page-head" style="display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap">
-        <div style="flex:1"><h1>Ваши видео</h1><p>Контент канала OrchardTech.</p></div>
+        <div style="flex:1"><h1>Ваши видео</h1><p>Контент канала «${esc(me.channel.name)}».</p></div>
         <button class="btn btn-primary" id="uploadBtn2">Загрузить видео</button>
       </div>
       <div class="list-rows">
-        ${list.map((v) => rowVideo(v, {
-          actions: `<span class="chip">${fmt(v.views)} просмотров</span><span class="chip">👍 ${fmt(v.likes || 0)}</span><span class="chip">${v.ago}</span>${v.media && api.upload ? `<button class="chip chip-danger" data-del="${v.id}">Удалить</button>` : ''}`
-        })).join('')}
+        ${list.length ? list.map((v) => rowVideo(v, {
+          actions: `<span class="chip">${fmt(v.views)} просмотров</span><span class="chip">👍 ${fmt(v.likes || 0)}</span><span class="chip">${esc(v.ago)}</span><button class="chip chip-danger" data-del="${v.id}">Удалить</button>`
+        })).join('') : emptyHtml('🎬', 'Вы ещё ничего не загрузили', 'Загрузите первое видео — оно сразу появится на главной.', { label: 'Загрузить видео', id: 'emptyUpload' })}
       </div>`;
   }
 
@@ -552,7 +468,7 @@
       list = list.filter((v) =>
         v.title.toLowerCase().includes(query) ||
         chOf(v).name.toLowerCase().includes(query) ||
-        v.desc.toLowerCase().includes(query) ||
+        (v.desc || '').toLowerCase().includes(query) ||
         v.category.toLowerCase().includes(query)
       );
     }
@@ -563,7 +479,7 @@
         <p>${list.length} ${plural(list.length, 'результат', 'результата', 'результатов')}</p>
       </div>
       <div class="list-rows">
-        ${list.length ? list.map((v) => rowVideo(v)).join('') : emptyHtml('🔍', 'Ничего не найдено', 'Попробуйте другой запрос: например, «код», «музыка» или «путешествия».')}
+        ${list.length ? list.map((v) => rowVideo(v)).join('') : emptyHtml('🔍', 'Ничего не найдено', 'Попробуйте другой запрос или категорию.')}
       </div>`;
   }
 
@@ -572,52 +488,32 @@
     if (!ch) return emptyHtml('🍊', 'Канал не найден', 'Возможно, ссылка устарела.');
     const list = VIDEOS.filter((v) => v.channel === chId);
     const isSub = state.subs.has(chId);
-    const activeTab = tab || 'videos';
-
-    const tabs = [
-      ['videos', 'Видео'],
-      ['shorts', 'Shorts'],
-      ['playlists', 'Плейлисты'],
-      ['about', 'О канале']
-    ];
+    const own = !!(me && me.channel && me.channel.id === chId);
+    const activeTab = tab === 'about' ? 'about' : 'videos';
+    const tabs = [['videos', 'Видео'], ['about', 'О канале']];
 
     let content = '';
     if (activeTab === 'videos') {
-      content = list.length ? `<div class="video-grid">${list.map(videoCard).join('')}</div>` : emptyHtml('🎬', 'Пока нет видео', 'Канал ещё не загрузил ни одного видео.');
-    } else if (activeTab === 'shorts') {
-      content = `<div class="shorts-page">${SHORTS.slice(0, 4).map(shortCard).join('')}</div>`;
-    } else if (activeTab === 'playlists') {
-      content = `<div class="playlist-grid">
-        ${PLAYLISTS.slice(0, 3).map((p) => `
-          <a class="playlist-card" href="#/playlist/${p.id}">
-            <div class="playlist-thumb">
-              <div class="thumb-art" style="background:linear-gradient(135deg, ${p.g1}, ${p.g2})">
-                <span class="thumb-emoji">${p.emoji}</span><span class="thumb-brand">Плейлист</span>
-              </div>
-              <span class="playlist-stack">${p.ids.length} видео</span>
-            </div>
-            <div class="playlist-info"><h3>${esc(p.title)}</h3><p>${esc(p.note)}</p></div>
-          </a>`).join('')}
-      </div>`;
+      content = list.length
+        ? `<div class="video-grid">${list.map(videoCard).join('')}</div>`
+        : emptyHtml('🎬', 'Пока нет видео', own ? 'Загрузите первое видео на свой канал.' : 'Канал ещё не загрузил ни одного видео.', own ? { label: 'Загрузить видео', id: 'emptyUpload' } : undefined);
     } else {
       content = `<div class="channel-about">
         <div class="about-block">
           <h3>Описание</h3>
-          <p>${esc(ch.description)}</p>
+          <p>${ch.description ? esc(ch.description) : 'Автор пока ничего не рассказал о канале.'}</p>
         </div>
         <div class="about-block">
           <h3>Статистика</h3>
           <div class="about-stats">
-            <div><b>${ch.subs}</b>подписчиков</div>
+            <div><b class="ch-subs-count-num">${esc(ch.subs)}</b>подписчиков</div>
             <div><b>${fmt(ch.videoCount)}</b>видео</div>
-            <div><b>${ch.views.replace(' просмотров', '').replace(' просмотра', '')}</b>просмотров</div>
+            <div><b>${fmt(ch.viewsNum)}</b>просмотров</div>
           </div>
         </div>
         <div class="about-block">
           <h3>Подробности</h3>
-          <p>Присоединился: ${esc(ch.joined)}
-Страна: Россия
-Ссылки: orchardtube.example/${esc(ch.handle.replace('@', ''))}</p>
+          <p>Присоединился: ${esc(ch.joined)}</p>
         </div>
       </div>`;
     }
@@ -629,142 +525,30 @@
       <div class="channel-head">
         ${avatarHtml(ch)}
         <div class="channel-info">
-          <h1>${esc(ch.name)} ${ch.verified ? '<svg class="ic"><use href="#i-verified"/></svg>' : ''}</h1>
+          <h1>${esc(ch.name)}</h1>
           <div class="channel-stats">
             <span>${esc(ch.handle)}</span><span class="dot">●</span>
-            <span>${ch.subs} подписчиков</span><span class="dot">●</span>
+            <span><span class="ch-subs-count">${esc(ch.subs)} подписчиков</span></span><span class="dot">●</span>
             <span>${fmt(ch.videoCount)} видео</span>
           </div>
-          <div class="channel-desc" id="chDesc">${esc(ch.description)}</div>
-          <button class="channel-more" id="chMore">Ещё</button>
+          ${ch.description ? `<div class="channel-desc" id="chDesc">${esc(ch.description)}</div><button class="channel-more" id="chMore">Ещё</button>` : ''}
           <div class="channel-actions">
-            <button class="subscribe-btn ${isSub ? 'subscribed' : ''}" data-sub="${chId}">
-              ${isSub ? 'Вы подписаны' : 'Подписаться'}
-            </button>
-            <button class="btn" id="chJoin">Спонсор</button>
-            <button class="btn btn-ghost"><svg class="ic" style="width:20px;height:20px"><use href="#i-share"/></svg></button>
+            ${own
+              ? `<button class="btn" id="chEdit">Настроить канал</button><button class="btn btn-primary" id="chUpload">Загрузить видео</button>`
+              : `<button class="subscribe-btn ${isSub ? 'subscribed' : ''}" data-sub="${esc(chId)}">${isSub ? 'Вы подписаны' : 'Подписаться'}</button>`}
           </div>
         </div>
       </div>
       <div class="channel-tabs">
-        ${tabs.map(([id, label]) => `<a class="channel-tab ${id === activeTab ? 'active' : ''}" href="#/channel/${chId}/${id}">${label}</a>`).join('')}
+        ${tabs.map(([id, label]) => `<a class="channel-tab ${id === activeTab ? 'active' : ''}" href="#/channel/${esc(chId)}/${id}">${label}</a>`).join('')}
       </div>
       ${content}`;
   }
 
-  function pageSimple(kind) {
-    const data = {
-      music: {
-        emoji: '🎧', title: 'Orchard Music', sub: 'Миллионы треков, подборки под настроение и живые выступления.',
-        cta: 'Открыть музыку', g1: '#a5b4fc', g2: '#4338ca'
-      },
-      kids: {
-        emoji: '🧸', title: 'Orchard Детям', sub: 'Безопасный контент, обучающие мультфильмы и родительский контроль.',
-        cta: 'Открыть детский режим', g1: '#86efac', g2: '#15803d'
-      }
-    }[kind] || { emoji: '🍊', title: 'OrchardTube', sub: '', cta: 'На главную', g1: '#ffb347', g2: '#e8590c' };
-
-    return `
-      <div style="border-radius:20px;padding:56px 40px;background:linear-gradient(120deg, ${data.g1}, ${data.g2});color:#fff;position:relative;overflow:hidden">
-        <div style="position:absolute;right:32px;bottom:-18px;font-size:150px;opacity:.28">${data.emoji}</div>
-        <div style="position:relative;max-width:620px">
-          <div style="font-size:12px;font-weight:800;letter-spacing:2px;text-transform:uppercase;opacity:.85">OrchardTube</div>
-          <h1 style="font-size:38px;margin:10px 0 12px;letter-spacing:-1px">${esc(data.title)}</h1>
-          <p style="font-size:16px;line-height:1.6;margin:0 0 24px;opacity:.95">${esc(data.sub)}</p>
-          <button class="btn" style="background:#fff;color:#1a1a1a" id="simpleCta">${esc(data.cta)}</button>
-        </div>
-      </div>
-      <div class="section-head" style="margin-top:34px"><svg class="ic"><use href="#i-fire"/></svg><h2>Популярное сейчас</h2></div>
-      <div class="video-grid">${VIDEOS.slice(0, 8).map(videoCard).join('')}</div>`;
-  }
-
-  /* ---------------- Premium ---------------- */
-  const PREMIUM_PERKS = [
-    { icon: 'i-play', emoji: '🚫', title: 'Без рекламы', text: 'Смотрите видео без перерывов на рекламу — на всех устройствах, в том числе в фоновом режиме.' },
-    { icon: 'i-download', emoji: '⬇️', title: 'Скачивания', text: 'Сохраняйте до 50 видео офлайн: в самолёте, метро или за городом — без интернета.' },
-    { icon: 'i-eye', emoji: '🌙', title: 'Фоновое воспроизведение', text: 'Экран погас — звук продолжает играть. Идеально для музыки и подкастов.' },
-    { icon: 'i-music', emoji: '🎵', title: 'Orchard Music Premium', text: 'Музыкальный сервис включён: миллионы треков без рекламы и офлайн.' }
-  ];
-
-  const PREMIUM_PLANS = [
-    { id: 'individual', name: 'Индивидуальный', price: { m: '279 ₽', y: '2 790 ₽' }, per: 'в месяц', best: true, note: 'Для одного аккаунта' },
-    { id: 'family', name: 'Семейный', price: { m: '439 ₽', y: '4 390 ₽' }, per: 'в месяц', best: false, note: 'До 5 участников домашнего хозяйства' },
-    { id: 'student', name: 'Студенческий', price: { m: '139 ₽', y: '1 390 ₽' }, per: 'в месяц', best: false, note: 'Нужно подтверждение статуса студента' }
-  ];
-
-  const PREMIUM_FAQ = [
-    ['Отменю в любой момент?', 'Да. Подписку можно отменить в пару кликов в настройках аккаунта — доступ сохранится до конца оплаченного периода.'],
-    ['Что входит в семейный план?', 'До 5 участников, каждый со своим аккаунтом, рекомендациями и историей. Все получают преимущества Premium.'],
-    ['Есть ли студенческая скидка?', 'Да, скидка около 50%. Статус студента нужно подтверждать каждые 12 месяцев.'],
-    ['Работает ли офлайн-режим?', 'Скачанные видео доступны 14 дней без выхода в сеть. После подключения срок обновляется автоматически.']
-  ];
-
-  function premiumHeroHtml() {
-    const active = !!state.premium;
-    return `
-      <div class="premium-hero">
-        <div class="premium-hero-emoji">🍊</div>
-        <div class="premium-hero-badge">OrchardTube</div>
-        <h1 class="premium-hero-title">${active ? 'Premium активен 🎉' : 'Premium без рекламы, скачиваний и границ'}</h1>
-        <p class="premium-hero-sub">Первые 30 дней бесплатно, потом от 139 ₽/мес. Отменить можно в любой момент.</p>
-        <div class="premium-hero-actions">
-          <button class="btn premium-cta" id="premiumMainCta">${active ? 'Управление подпиской' : 'Попробовать бесплатно'}</button>
-          <span class="premium-hero-note">${active ? 'План: Индивидуальный · следующий платёж 21 дек.' : 'Без автопродления первый месяц'}</span>
-        </div>
-      </div>`;
-  }
-
-  function pagePremium() {
-    const period = state.premiumPeriod || 'm';
-    return `
-      ${premiumHeroHtml()}
-
-      <div class="premium-perks">
-        ${PREMIUM_PERKS.map((p) => `
-          <div class="premium-perk">
-            <span class="premium-perk-emoji">${p.emoji}</span>
-            <h3>${esc(p.title)}</h3>
-            <p>${esc(p.text)}</p>
-          </div>`).join('')}
-      </div>
-
-      <div class="premium-plans-head">
-        <h2>Выберите план</h2>
-        <div class="premium-toggle" id="premiumToggle">
-          <button class="premium-period ${period === 'm' ? 'active' : ''}" data-period="m">Помесячно</button>
-          <button class="premium-period ${period === 'y' ? 'active' : ''}" data-period="y">Год <b>−17%</b></button>
-        </div>
-      </div>
-      <div class="premium-plans" id="premiumPlans">
-        ${PREMIUM_PLANS.map((pl) => `
-          <div class="premium-plan ${pl.best ? 'best' : ''}">
-            ${pl.best ? '<span class="premium-plan-flag">Популярный</span>' : ''}
-            <h3>${esc(pl.name)}</h3>
-            <div class="premium-plan-price">${pl.price[period]}<span>${pl.per}</span></div>
-            <p>${esc(pl.note)}</p>
-            <button class="btn ${pl.best ? 'btn-primary' : ''} premium-plan-cta" data-plan="${pl.id}">
-              ${state.premium ? 'Перейти на план' : 'Выбрать'}
-            </button>
-          </div>`).join('')}
-      </div>
-
-      <div class="section-head" style="margin-top:40px"><svg class="ic"><use href="#i-help"/></svg><h2>Частые вопросы</h2></div>
-      <div class="premium-faq" id="premiumFaq">
-        ${PREMIUM_FAQ.map(([q, a], i) => `
-          <details class="premium-faq-item" ${i === 0 ? 'open' : ''}>
-            <summary>${esc(q)}<svg class="ic"><use href="#i-chevron-down"/></svg></summary>
-            <p>${esc(a)}</p>
-          </details>`).join('')}
-      </div>
-
-      <div class="section-head" style="margin-top:40px"><svg class="ic"><use href="#i-fire"/></svg><h2>Премиум-контент уже здесь</h2></div>
-      <div class="video-grid">${VIDEOS.slice(0, 8).map(videoCard).join('')}</div>`;
-  }
 
   /* ---------------- просмотр ---------------- */
   let player = null;
   let sideFilter = 'all';
-  let commentSortMode = 'top';
 
   function parseDuration(d) {
     if (!d || d === 'LIVE') return 0;
@@ -792,58 +576,38 @@
       <div id="sideList">${list.map(compactCard).join('')}</div>`;
   }
 
-  // Комментарии без videoId — демо-набор для любого видео; с videoId — только для своего
-  function commentsFor(v) {
-    return (state.comments[v.id] || []).concat(COMMENTS.filter((c) => !c.videoId || c.videoId === v.id));
-  }
+  const commentsFor = (v) => commentsCache[v.id] || [];
 
   function commentsHtml(v) {
-    const all = commentsFor(v);
+    const mine = me ? (me.channel || { avatar: initialsOf(me.user.name), color: '#ff6b00' }) : { avatar: '?', color: '#777' };
     return `
       <div class="comments">
-        <div class="comments-head">
-          <h2>${all.length} ${plural(all.length, 'комментарий', 'комментария', 'комментариев')}</h2>
-          <div class="comments-sort-group" id="sortGroup">
-            <button class="comments-sort active" data-sort="top" id="sortTop"><svg class="ic"><use href="#i-thumb-up"/></svg>Популярные</button>
-            <button class="comments-sort" data-sort="new" id="sortNew"><svg class="ic"><use href="#i-history"/></svg>Новые</button>
-          </div>
-        </div>
+        <div class="comments-head"><h2 id="commentsTitle">Комментарии</h2></div>
         <div class="comment-form">
-          ${avatarHtml({ avatar: 'В', color: '#ff6b00' }, 40)}
+          ${avatarHtml(mine, 40)}
           <div>
-            <textarea class="comment-input" id="commentInput" placeholder="Введите комментарий..." rows="1"></textarea>
+            <textarea class="comment-input" id="commentInput" placeholder="${me ? 'Введите комментарий...' : 'Войдите, чтобы оставить комментарий'}" rows="1" maxlength="1000"></textarea>
             <div class="comment-form-actions">
               <button class="btn btn-ghost" id="commentCancel">Отмена</button>
               <button class="btn btn-primary" id="commentSend">Оставить комментарий</button>
             </div>
           </div>
         </div>
-        <div id="commentList">
-          ${all.map((c, i) => commentHtml(c, v.id, i)).join('')}
-        </div>
+        <div id="commentList"><p class="muted-note">Загружаем комментарии…</p></div>
       </div>`;
   }
 
-  function commentHtml(c, vid, idx) {
-    const key = vid + ':' + idx;
-    const liked = commentLiked.has(key);
+  function commentHtml(c) {
+    const author = c.channel
+      ? `<a class="comment-author" href="#/channel/${esc(c.channel)}">${esc(c.author)}</a>`
+      : `<span class="comment-author">${esc(c.author)}</span>`;
     return `
       <div class="comment">
         ${avatarHtml({ avatar: c.avatar, color: c.color }, 40)}
         <div>
-          <div class="comment-head">
-            <span class="comment-author">${esc(c.author)}</span>
-            <span class="comment-time">${esc(c.ago)}</span>
-            ${c.pinned ? '<span class="pin-tag">Закреплённый комментарий</span>' : ''}
-          </div>
+          <div class="comment-head">${author}<span class="comment-time">${esc(c.ago)}</span></div>
           <p class="comment-text">${esc(c.text)}</p>
-          <div class="comment-actions">
-            <button class="comment-like ${liked ? 'active' : ''}" data-clike="${key}">
-              <svg class="ic"><use href="#i-thumb-up"/></svg>${fmt(c.likes + (liked ? 1 : 0))}
-            </button>
-            <button class="comment-like" data-cdislike="${key}"><svg class="ic"><use href="#i-thumb-down"/></svg></button>
-            <button class="comment-reply">Ответить</button>
-          </div>
+          ${c.canDelete ? `<div class="comment-actions"><button class="comment-reply" data-cdel="${esc(c.id)}">Удалить</button></div>` : ''}
         </div>
       </div>`;
   }
@@ -854,8 +618,9 @@
     const ch = chOf(v);
     const liked = state.likes.has(v.id);
     const disliked = state.dislikes.has(v.id);
-    const likeCount = (v.likes || 0) + (liked ? 1 : 0);
+    const likeCount = v.likes || 0;
     const isSub = state.subs.has(v.channel);
+    const own = !!(me && me.channel && me.channel.id === v.channel);
     const saved = state.later.has(v.id);
 
     return `
@@ -863,9 +628,7 @@
         <div class="watch-main">
           <div class="player" id="player" data-id="${v.id}">
             <div class="player-art" style="background:linear-gradient(135deg, ${v.g1}, ${v.g2})">
-              ${v.media
-                ? `<video class="player-video" id="realVideo" src="${esc(v.media)}" ${v.thumb ? `poster="${esc(v.thumb)}"` : ''} preload="metadata" playsinline></video>`
-                : `<span class="thumb-emoji">${v.emoji}</span>`}
+              <video class="player-video" id="realVideo" src="${esc(v.media)}" ${v.thumb ? `poster="${esc(v.thumb)}"` : ''} preload="metadata" playsinline></video>
             </div>
             <span class="player-watermark">OrchardTube</span>
             <div class="player-center">
@@ -878,10 +641,8 @@
               <div class="pc-row">
                 <button class="pc-btn" id="pcPlay" aria-label="Пауза"><svg class="ic"><use href="#i-play"/></svg></button>
                 <button class="pc-btn" id="pcMute" aria-label="Звук"><svg class="ic"><use href="#i-volume"/></svg></button>
-                <span class="pc-time" id="pcTime">0:00 / ${v.live ? 'прямой эфир' : v.duration}</span>
+                <span class="pc-time" id="pcTime">0:00 / ${esc(v.duration)}</span>
                 <span class="pc-spacer"></span>
-                <button class="quality" id="pcQuality">1080p</button>
-                <button class="pc-btn" aria-label="Настройки"><svg class="ic"><use href="#i-settings"/></svg></button>
                 <button class="pc-btn" id="pcFull" aria-label="Полный экран"><svg class="ic"><use href="#i-fullscreen"/></svg></button>
               </div>
             </div>
@@ -893,12 +654,12 @@
             <div class="watch-channel">
               <a href="#/channel/${v.channel}">${avatarHtml(ch, 40)}</a>
               <div>
-                <a class="wc-name" href="#/channel/${v.channel}">${esc(ch.name)} ${ch.verified ? '<svg class="ic"><use href="#i-verified"/></svg>' : ''}</a>
-                <div class="wc-subs">${ch.subs} подписчиков</div>
+                <a class="wc-name" href="#/channel/${v.channel}">${esc(ch.name)}</a>
+                <div class="wc-subs">${esc(ch.subs)} подписчиков</div>
               </div>
-              <button class="subscribe-btn ${isSub ? 'subscribed' : ''}" data-sub="${v.channel}">
+              ${own ? '' : `<button class="subscribe-btn ${isSub ? 'subscribed' : ''}" data-sub="${esc(v.channel)}">
                 ${isSub ? 'Вы подписаны' : 'Подписаться'}
-              </button>
+              </button>`}
             </div>
 
             <div class="action-group">
@@ -916,10 +677,6 @@
             </div>
 
             <div class="action-group">
-              <button class="action-btn" id="downloadBtn"><svg class="ic"><use href="#i-download"/></svg><span>Скачать</span></button>
-            </div>
-
-            <div class="action-group">
               <button class="action-btn ${saved ? 'active' : ''}" id="laterBtn" data-watch-later="${v.id}">
                 <svg class="ic"><use href="#i-save"/></svg><span>${saved ? 'Сохранено' : 'Сохранить'}</span>
               </button>
@@ -932,7 +689,7 @@
 
           <div class="watch-desc collapsed" id="watchDesc">
             <div class="desc-meta">
-              <span>${v.live ? `${v.watching} смотрят сейчас` : v.viewsText}</span>
+              <span>${esc(v.viewsText)}</span>
               <span>${v.ago}</span>
               <span>#${esc(v.category.toLowerCase().replace(/\s+/g, ''))}</span>
             </div>
@@ -949,37 +706,6 @@
       </div>`;
   }
 
-  function pageShortsView(sid) {
-    const s = SHORTS.find((x) => x.id === sid) || SHORTS[0];
-    const idx = SHORTS.indexOf(s);
-    const next = SHORTS[(idx + 1) % SHORTS.length];
-    return `
-      <div style="display:grid;grid-template-columns:minmax(0,420px) 1fr;gap:32px;align-items:start;max-width:1100px">
-        <div>
-          <div style="position:relative;aspect-ratio:9/16;border-radius:18px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.45)">
-            <div class="thumb-art" style="background:linear-gradient(160deg, ${s.g1}, ${s.g2})">
-              <span class="thumb-emoji" style="font-size:96px">${s.emoji}</span>
-            </div>
-            <div style="position:absolute;left:0;right:0;bottom:0;padding:20px;background:linear-gradient(transparent, rgba(0,0,0,.75));color:#fff;z-index:2">
-              <div style="font-weight:700;font-size:17px;margin-bottom:6px">${esc(s.title)}</div>
-              <div style="font-size:13px;opacity:.85">${s.views} просмотров</div>
-            </div>
-            <button class="big-play" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3" id="shortPlay">
-              <svg class="ic"><use href="#i-play"/></svg>
-            </button>
-          </div>
-        </div>
-        <div>
-          <div class="page-head"><h1>Shorts</h1><p>Вертикальные видео OrchardTube.</p></div>
-          <div class="shorts-page" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr))">
-            ${SHORTS.filter((x) => x.id !== s.id).map(shortCard).join('')}
-          </div>
-          <div style="margin-top:24px">
-            <a class="btn btn-primary" href="#/shorts/${next.id}">Следующий Short</a>
-          </div>
-        </div>
-      </div>`;
-  }
 
   /* ---------------- инициализация плеера ---------------- */
   let activeVideo = null;
@@ -1004,8 +730,6 @@
     const fill = $('#pcFill');
     const knob = $('#pcKnob');
     const timeEl = $('#pcTime');
-    const q = $('#pcQuality');
-    if (q) q.hidden = true; // выбор качества не применим к одному файлу
     let counted = false;
 
     const total = () => (isFinite(vid.duration) ? vid.duration : 0);
@@ -1024,7 +748,17 @@
     vid.addEventListener('play', () => {
       el.classList.add('is-playing');
       $('#pcPlay use').setAttribute('href', '#i-pause');
-      if (!counted) { counted = true; post(`/api/videos/${encodeURIComponent(v.id)}/view`); }
+      if (!counted) {
+        counted = true;
+        jsonPost(`/api/videos/${encodeURIComponent(v.id)}/view`, {}, 'POST', 8000).then((r) => {
+          if (r && r.data && r.data.views != null) {
+            v.views = r.data.views;
+            v.viewsText = r.data.viewsText;
+            const first = $('.desc-meta span');
+            if (first) first.textContent = v.viewsText;
+          }
+        }).catch(() => {});
+      }
     });
     vid.addEventListener('pause', () => {
       el.classList.remove('is-playing');
@@ -1066,92 +800,8 @@
   function initPlayer(v) {
     stopPlayer();
     const el = $('#player');
-    if (!el) return;
-    const realVid = $('#realVideo');
-    if (realVid) { initRealPlayer(v, el, realVid); return; }
-    const total = v.live ? 0 : parseDuration(v.duration);
-    player = { id: v.id, t: Math.round(total * (v.watched || 0)), playing: false, total, live: !!v.live, timer: null };
-    const fill = $('#pcFill');
-    const knob = $('#pcKnob');
-    const timeEl = $('#pcTime');
-
-    function paint() {
-      if (!player) return;
-      if (player.live) {
-        fill.style.width = '100%';
-        knob.style.left = '100%';
-        timeEl.textContent = 'прямой эфир';
-        return;
-      }
-      const p = player.total ? (player.t / player.total) * 100 : 0;
-      fill.style.width = p + '%';
-      knob.style.left = p + '%';
-      timeEl.textContent = timeText(player.t) + ' / ' + v.duration;
-    }
-    paint();
-
-    function tick() {
-      if (!player || !player.playing || player.live) return;
-      player.t += 1;
-      if (player.t >= player.total) {
-        player.t = player.total;
-        paint();
-        setPlaying(false);
-        return;
-      }
-      paint();
-    }
-
-    function setPlaying(on) {
-      if (!player) return;
-      player.playing = on;
-      el.classList.toggle('is-playing', on);
-      $('#pcPlay use').setAttribute('href', on ? '#i-pause' : '#i-play');
-      if (player.timer) clearInterval(player.timer);
-      player.timer = on ? setInterval(tick, 1000) : null;
-    }
-    window.__otSetPlaying = setPlaying;
-
-    let counted = false;
-    const countView = () => { if (!counted) { counted = true; post(`/api/videos/${encodeURIComponent(v.id)}/view`); } };
-    $('#bigPlay').addEventListener('click', () => { setPlaying(true); countView(); });
-    $('#pcPlay').addEventListener('click', () => { setPlaying(!player.playing); if (player && player.playing) countView(); });
-
-    el.querySelector('.player-art').addEventListener('click', () => {
-      if (!player) return;
-      setPlaying(!player.playing);
-    });
-
-    $('#pcBar').addEventListener('click', (e) => {
-      if (!player || player.live) return;
-      const r = e.currentTarget.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-      player.t = Math.round(player.total * ratio);
-      paint();
-    });
-
-    $('#pcMute').addEventListener('click', (e) => {
-      const b = e.currentTarget;
-      b.classList.toggle('active');
-      const use = b.querySelector('use');
-      use.setAttribute('href', b.classList.contains('active') ? '#i-volume' : '#i-volume');
-      toast(b.classList.contains('active') ? 'Звук выключен' : 'Звук включён');
-    });
-
-    $('#pcQuality').addEventListener('click', (e) => {
-      const opts = ['144p', '360p', '720p', '1080p', '4K'];
-      const cur = opts.indexOf(e.currentTarget.textContent);
-      e.currentTarget.textContent = opts[(cur + 1) % opts.length];
-    });
-
-    $('#pcFull').addEventListener('click', () => {
-      try {
-        if (document.fullscreenElement) document.exitFullscreen();
-        else el.requestFullscreen && el.requestFullscreen();
-      } catch (err) { toast('Полноэкранный режим недоступен'); }
-    });
-
-    recordHistory(v);
+    const vid = $('#realVideo');
+    if (el && vid) initRealPlayer(v, el, vid);
   }
 
   function togglePlay() {
@@ -1171,8 +821,7 @@
       b.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (b.dataset.act === 'later') toggleLater(b.dataset.id);
-        else toast('Видео добавлено в очередь');
+        toggleLater(b.dataset.id);
       });
     });
   }
@@ -1191,11 +840,8 @@
       VIDEOS.forEach((v) => {
         if (v.title.toLowerCase().includes(lower)) matches.add(v.title);
         const ch = chOf(v);
-        if (ch.name.toLowerCase().includes(lower)) matches.add(ch.name);
+        if (ch && ch.name.toLowerCase().includes(lower)) matches.add(ch.name);
         if (v.category.toLowerCase().includes(lower)) matches.add(v.category);
-      });
-      SHORTS.forEach((s) => {
-        if (s.title.toLowerCase().includes(lower)) matches.add('Shorts: ' + s.title);
       });
       const arr = [...matches].slice(0, 8);
       if (!arr.length) { closeAC(); return; }
@@ -1206,7 +852,7 @@
       acOpen = true;
       $$('.ac-item', box).forEach((item) => {
         item.addEventListener('click', () => {
-          input.value = item.dataset.ac.replace(/^Shorts: /, '');
+          input.value = item.dataset.ac;
           location.hash = '#/search?q=' + encodeURIComponent(input.value);
           closeAC();
         });
@@ -1238,36 +884,32 @@
       chip.addEventListener('click', () => {
         state.filter = chip.dataset.cat;
         $$('#chips .chip').forEach((c) => c.classList.toggle('active', c.dataset.cat === state.filter));
-        const wrap = $('#shortsStripWrap');
-        if (wrap) wrap.innerHTML = state.filter === 'Все' ? shortsStrip() : '';
         const grid = $('#homeGrid');
         if (grid) { grid.innerHTML = gridHtml(); bindCards(grid); }
-        if (wrap) bindCards(wrap);
       });
     });
   }
 
   function bindSubscribe() {
     $$('[data-sub]').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
+        if (!requireLogin('Войдите через Google, чтобы подписываться на каналы.')) return;
         const id = btn.dataset.sub;
         const ch = CHANNELS[id];
-        if (state.subs.has(id)) {
-          state.subs.delete(id);
-          post(`/api/channels/${encodeURIComponent(id)}/subscribe`, { delta: -1 });
-          toast(`Вы отписались от ${ch.name}`);
-        } else {
-          state.subs.add(id);
-          post(`/api/channels/${encodeURIComponent(id)}/subscribe`, { delta: 1 });
-          toast(`Вы подписались на ${ch.name}`);
-        }
-        saveState();
+        const want = !state.subs.has(id);
+        const r = await jsonPost(`/api/channels/${encodeURIComponent(id)}/subscribe`, { on: want }, 'POST', 10000).catch(() => null);
+        if (!r || !r.ok || !r.data) { toast((r && r.data && r.data.message) || 'Не удалось выполнить действие'); return; }
+        if (want) state.subs.add(id); else state.subs.delete(id);
+        ch.subs = r.data.subs;
+        ch.subsNum = r.data.subsNum;
+        toast(want ? `Вы подписались на ${ch.name}` : `Вы отписались от ${ch.name}`);
         renderSideChannels();
         $$(`[data-sub="${id}"]`).forEach((b) => {
-          const on = state.subs.has(id);
-          b.classList.toggle('subscribed', on);
-          b.textContent = on ? 'Вы подписаны' : 'Подписаться';
+          b.classList.toggle('subscribed', want);
+          b.textContent = want ? 'Вы подписаны' : 'Подписаться';
         });
+        $$('.wc-subs').forEach((el) => { el.textContent = `${ch.subs} подписчиков`; });
+        $$('.ch-subs-count').forEach((el) => { el.textContent = `${ch.subs} подписчиков`; });
       });
     });
   }
@@ -1276,31 +918,33 @@
     const likeBtn = $('#likeBtn');
     const dislikeBtn = $('#dislikeBtn');
 
-    likeBtn.addEventListener('click', () => {
-      const on = state.likes.has(v.id);
-      if (on) state.likes.delete(v.id);
-      else { state.likes.add(v.id); state.dislikes.delete(v.id); }
+    likeBtn.addEventListener('click', async () => {
+      if (!requireLogin('Войдите через Google, чтобы ставить лайки.')) return;
+      const want = !state.likes.has(v.id);
+      const r = await jsonPost(`/api/videos/${encodeURIComponent(v.id)}/like`, { on: want }, 'POST', 10000).catch(() => null);
+      if (!r || !r.ok || !r.data) { toast('Не удалось поставить лайк'); return; }
+      if (want) { state.likes.add(v.id); state.dislikes.delete(v.id); } else state.likes.delete(v.id);
+      v.likes = r.data.likes;
       saveState();
-      post(`/api/videos/${encodeURIComponent(v.id)}/like`, { delta: on ? -1 : 1 });
-      likeBtn.classList.toggle('active', !on);
+      likeBtn.classList.toggle('active', want);
       dislikeBtn.classList.remove('active');
-      $('#likeCount').textContent = fmt((v.likes || 0) + (!on ? 1 : 0));
-      toast(on ? 'Лайк убран' : 'Лайк поставлен');
+      $('#likeCount').textContent = fmt(v.likes);
+      toast(want ? 'Лайк поставлен' : 'Лайк убран');
     });
 
-    dislikeBtn.addEventListener('click', () => {
+    dislikeBtn.addEventListener('click', async () => {
       const on = state.dislikes.has(v.id);
-      if (!on && state.likes.has(v.id)) post(`/api/videos/${encodeURIComponent(v.id)}/like`, { delta: -1 });
-      if (on) state.dislikes.delete(v.id);
-      else { state.dislikes.add(v.id); state.likes.delete(v.id); }
+      if (!on && state.likes.has(v.id)) {
+        const r = await jsonPost(`/api/videos/${encodeURIComponent(v.id)}/like`, { on: false }, 'POST', 10000).catch(() => null);
+        if (r && r.ok && r.data) { state.likes.delete(v.id); v.likes = r.data.likes; $('#likeCount').textContent = fmt(v.likes); }
+      }
+      if (on) state.dislikes.delete(v.id); else state.dislikes.add(v.id);
       saveState();
       dislikeBtn.classList.toggle('active', !on);
-      likeBtn.classList.remove('active');
-      $('#likeCount').textContent = fmt((v.likes || 0) + (state.likes.has(v.id) ? 1 : 0));
+      likeBtn.classList.toggle('active', state.likes.has(v.id));
     });
 
     $('#shareBtn').addEventListener('click', () => copyLink(v.id));
-    $('#downloadBtn').addEventListener('click', () => toast('Скачивание доступно в OrchardTube Premium'));
     $('#laterBtn').addEventListener('click', () => toggleLater(v.id));
     $('#watchMore').addEventListener('click', (e) => openVideoMenu(e.currentTarget, v.id));
 
@@ -1316,33 +960,25 @@
     const input = $('#commentInput');
     let sending = false;
     const send = async () => {
+      if (!requireLogin('Войдите через Google, чтобы писать комментарии.')) return;
       const text = input.value.trim();
       if (!text) { input.focus(); return; }
       if (sending) return;
-      if (api.db) {
-        sending = true;
-        try {
-          const r = await apiFetch('/api/comments', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ videoId: v.id, author: 'Вы', text })
-          }, 8000);
-          if (!r.ok || !r.data || !r.data.comment) throw new Error('bad response');
-          COMMENTS.unshift({ ...r.data.comment, author: 'Вы', avatar: 'В' });
-          input.value = '';
-          renderComments(v, commentSortMode);
-        } catch (e) {
-          toast('Не удалось отправить комментарий');
-        } finally { sending = false; }
-        return;
-      }
-      const list = state.comments[v.id] || (state.comments[v.id] = []);
-      list.unshift({ author: 'Вы', avatar: 'В', color: '#ff6b00', ago: 'только что', likes: 0, text });
-      input.value = '';
-      saveState();
-      renderComments(v, commentSortMode);
+      sending = true;
+      try {
+        const r = await jsonPost(`/api/videos/${encodeURIComponent(v.id)}/comments`, { text }, 'POST', 10000);
+        if (!r.ok || !r.data || !r.data.comment) throw new Error((r.data && r.data.message) || 'Не удалось отправить комментарий');
+        commentsCache[v.id] = [r.data.comment, ...commentsFor(v)];
+        input.value = '';
+        input.style.height = 'auto';
+        renderComments(v);
+      } catch (e) {
+        toast(e.message);
+      } finally { sending = false; }
     };
     $('#commentSend').addEventListener('click', send);
     $('#commentCancel').addEventListener('click', () => { input.value = ''; });
+    input.addEventListener('focus', () => { if (!me) { input.blur(); openLogin('Войдите через Google, чтобы писать комментарии.'); } });
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
     });
@@ -1350,7 +986,7 @@
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 160) + 'px';
     });
-    bindCommentActions(v);
+    loadComments(v);
 
     bindSideFilters(v);
     initPlayer(v);
@@ -1368,49 +1004,36 @@
     });
   }
 
-  function renderComments(v, sortMode) {
-    let all = commentsFor(v);
-    if (sortMode === 'top') {
-      all.sort((a, b) => b.likes - a.likes);
-    } else {
-      all.sort((a, b) => {
-        if (a.pinned && !b.pinned) return -1;
-        if (!a.pinned && b.pinned) return 1;
-        return 0;
-      });
-    }
-    $('#commentList').innerHTML = all.map((c, i) => commentHtml(c, v.id, i)).join('');
-    const headEl = $('.comments-head h2');
-    if (headEl) headEl.textContent = `${all.length} ${plural(all.length, 'комментарий', 'комментария', 'комментариев')}`;
+  function renderComments(v) {
+    const list = $('#commentList');
+    if (!list) return;
+    const all = commentsFor(v);
+    list.innerHTML = all.length ? all.map(commentHtml).join('') : '<p class="muted-note">Пока нет комментариев. Будьте первым!</p>';
+    const head = $('#commentsTitle');
+    if (head) head.textContent = `${all.length} ${plural(all.length, 'комментарий', 'комментария', 'комментариев')}`;
     bindCommentActions(v);
   }
 
-  function bindCommentActions(v) {
-    $$('[data-clike]').forEach((b) => {
-      b.addEventListener('click', () => {
-        const key = b.dataset.clike;
-        if (commentLiked.has(key)) commentLiked.delete(key);
-        else commentLiked.add(key);
-        renderComments(v, commentSortMode);
-      });
-    });
-    $$('[data-cdislike]').forEach((b) => {
-      b.addEventListener('click', () => toast('Спасибо за отзыв'));
-    });
-    $$('.comment-reply').forEach((b) => {
-      b.addEventListener('click', () => {
-        const input = $('#commentInput');
-        if (input) { input.focus(); input.placeholder = 'Напишите ответ...'; }
-      });
-    });
+  async function loadComments(v) {
+    try {
+      const r = await apiFetch(`/api/videos/${encodeURIComponent(v.id)}/comments`, {}, 15000);
+      if (!r.ok || !r.data) throw new Error('bad response');
+      commentsCache[v.id] = r.data.comments;
+      renderComments(v);
+    } catch (e) {
+      const list = $('#commentList');
+      if (list) list.innerHTML = '<p class="muted-note">Не удалось загрузить комментарии.</p>';
+    }
+  }
 
-    // сортировка комментариев
-    $$('#sortGroup .comments-sort').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        commentSortMode = btn.dataset.sort;
-        $$('#sortGroup .comments-sort').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        renderComments(v, commentSortMode);
+  function bindCommentActions(v) {
+    $$('[data-cdel]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        if (!confirm('Удалить комментарий?')) return;
+        const r = await apiFetch(`/api/comments/${encodeURIComponent(b.dataset.cdel)}`, { method: 'DELETE' }, 10000).catch(() => null);
+        if (!r || !r.ok) { toast('Не удалось удалить комментарий'); return; }
+        commentsCache[v.id] = commentsFor(v).filter((c) => c.id !== b.dataset.cdel);
+        renderComments(v);
       });
     });
   }
@@ -1434,9 +1057,16 @@
           more.textContent = desc.classList.contains('open') ? 'Свернуть' : 'Ещё';
         });
       }
-      const join = $('#chJoin');
-      if (join) join.addEventListener('click', () => toast('Спонсорство появится в OrchardTube Premium'));
+      const edit = $('#chEdit');
+      if (edit) edit.addEventListener('click', () => openChannelModal('edit'));
+      const up = $('#chUpload');
+      if (up) up.addEventListener('click', openUpload);
     }
+
+    [['emptyLogin', () => openLogin()], ['emptyCreateChannel', () => openChannelModal('create')], ['emptyUpload', openUpload]].forEach(([id, fn]) => {
+      const b = $('#' + id);
+      if (b) b.addEventListener('click', fn);
+    });
 
     const clear = $('#clearHistory');
     if (clear) clear.addEventListener('click', () => {
@@ -1470,67 +1100,15 @@
         const id = btn.dataset.del;
         const v = byId(id);
         if (!v || !confirm(`Удалить видео «${v.title}»? Это действие нельзя отменить.`)) return;
-        if (api.tokenRequired && !state.uploadToken) {
-          state.uploadToken = (prompt('Ключ загрузки') || '').trim();
-          saveState();
-        }
-        try {
-          const r = await apiFetch(`/api/videos/${encodeURIComponent(id)}`, { method: 'DELETE', headers: uploadHeaders() }, 15000);
-          if (!r.ok) throw new Error(r.status === 401 ? 'Неверный ключ загрузки' : 'Не удалось удалить видео');
-          const i = VIDEOS.findIndex((x) => x.id === id);
-          if (i >= 0) VIDEOS.splice(i, 1);
-          toast('Видео удалено');
-          render();
-        } catch (e) {
-          toast(e.message);
-        }
-      });
-    });
-
-    const cta = $('#simpleCta');
-    if (cta) cta.addEventListener('click', () => toast('Это демо-страница OrchardTube'));
-
-    const sp = $('#shortPlay');
-    if (sp) sp.addEventListener('click', () => toast('Shorts проигрываются в демо-режиме'));
-
-    if (page === 'premium') bindPremium();
-  }
-
-  /* ---------------- привязки Premium ---------------- */
-  function bindPremium() {
-    const main = $('#premiumMainCta');
-    if (main) {
-      main.addEventListener('click', () => {
-        if (state.premium) {
-          state.premium = null;
-          saveState();
-          render();
-          toast('Подписка Premium отменена');
-        } else {
-          activatePremium('individual');
-        }
-      });
-    }
-
-    $$('#premiumPlans .premium-plan-cta').forEach((b) => {
-      b.addEventListener('click', () => activatePremium(b.dataset.plan));
-    });
-
-    $$('#premiumToggle .premium-period').forEach((b) => {
-      b.addEventListener('click', () => {
-        state.premiumPeriod = b.dataset.period;
-        saveState();
+        const r = await apiFetch(`/api/videos/${encodeURIComponent(id)}`, { method: 'DELETE' }, 15000).catch(() => null);
+        if (!r || !r.ok) { toast((r && r.data && r.data.message) || 'Не удалось удалить видео'); return; }
+        const i = VIDEOS.findIndex((x) => x.id === id);
+        if (i >= 0) VIDEOS.splice(i, 1);
+        if (me && me.channel && CHANNELS[me.channel.id]) CHANNELS[me.channel.id].videoCount = Math.max(0, (CHANNELS[me.channel.id].videoCount || 1) - 1);
+        toast('Видео удалено');
         render();
       });
     });
-  }
-
-  function activatePremium(planId) {
-    const pl = PREMIUM_PLANS.find((p) => p.id === planId) || PREMIUM_PLANS[0];
-    state.premium = { plan: pl.id, name: pl.name, since: Date.now() };
-    saveState();
-    render();
-    toast(`🍊 Premium активирован: ${pl.name}. 30 дней бесплатно!`);
   }
 
   /* ---------------- рендер ---------------- */
@@ -1546,19 +1124,13 @@
 
     switch (page) {
       case 'watch': html = pageWatch(parts[1]); break;
-      case 'shorts': html = parts[1] ? pageShortsView(parts[1]) : pageShorts(); break;
       case 'subs': html = pageSubs(); break;
-      case 'library': html = pageLibrary(); break;
-      case 'playlist': html = pagePlaylist(parts[1]); break;
       case 'history': html = pageHistory(); break;
       case 'liked': html = pageLiked(); break;
       case 'watch-later': html = pageLater(); break;
       case 'my-videos': html = pageMyVideos(); break;
       case 'search': html = pageSearch(params.get('q') || ''); break;
       case 'channel': html = pageChannel(parts[1], parts[2]); break;
-      case 'premium': html = pagePremium(); break;
-      case 'music':
-      case 'kids': html = pageSimple(page); break;
       default: html = pageHome();
     }
 
@@ -1582,8 +1154,6 @@
       $('#searchInput').blur();
     });
 
-    $('#micBtn').addEventListener('click', () => toast('Голосовой поиск недоступен в демо-версии'));
-
     $('#menuBtn').addEventListener('click', () => {
       if (window.innerWidth <= 1312) {
         document.body.classList.toggle('nav-open');
@@ -1594,55 +1164,42 @@
 
     $('#scrim').addEventListener('click', () => document.body.classList.remove('nav-open'));
 
-    $('#createBtn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openPopover(e.currentTarget, `
-        <button class="pop-item" data-create="upload"><svg class="ic"><use href="#i-upload"/></svg>Загрузить видео</button>
-        <button class="pop-item" data-create="live"><svg class="ic"><use href="#i-live"/></svg>Начать трансляцию</button>
-        <button class="pop-item" data-create="post"><svg class="ic"><use href="#i-pencil"/></svg>Создать пост</button>
-      `);
-      $$('#popover .pop-item').forEach((b) => b.addEventListener('click', () => {
-        closePopover();
-        if (b.dataset.create === 'upload') openUpload();
-        if (b.dataset.create === 'live') toast('Трансляция начнётся после подключения камеры');
-        if (b.dataset.create === 'post') toast('Посты доступны на каналах с 500+ подписчиков');
-      }));
-    });
+    $('#createBtn').addEventListener('click', () => openUpload());
+
+    $('#loginBtn').addEventListener('click', () => openLogin());
 
     $('#bellBtn').addEventListener('click', (e) => {
       e.stopPropagation();
       openPopover(e.currentTarget, `
         <div class="pop-head"><div class="ph-name">Уведомления</div></div>
         <div class="pop-sep"></div>
-        ${NOTIFS.map((n) => `
-          <a class="pop-item" href="#/watch/${VIDEOS.find((v) => v.channel === n.ch)?.id || ''}" style="align-items:flex-start">
-            ${avatarHtml(CHANNELS[n.ch])}
-            <span style="display:block">
-              <span style="display:block;line-height:1.35;margin-bottom:3px">${esc(n.title)}</span>
-              <span style="color:var(--fg-dim);font-size:12px">${esc(n.ago)}</span>
-            </span>
-          </a>`).join('')}
-        <div class="pop-sep"></div>
-        <button class="pop-item" data-keep-popover="1">Отметить всё как прочитанное</button>
+        <div class="pop-item" style="cursor:default;color:var(--fg-dim)">Пока нет уведомлений</div>
       `, 'right');
     });
 
     $('#avatarBtn').addEventListener('click', (e) => {
       e.stopPropagation();
+      if (!me) return;
+      const name = me.channel ? me.channel.name : me.user.name;
       openPopover(e.currentTarget, `
         <div class="pop-head">
-          <span class="avatar-btn">В</span>
-          <div><div class="ph-name">Владимир</div><div class="ph-mail">vladimir@orchardtube.dev</div></div>
+          <span class="avatar-btn">${esc(me.channel ? me.channel.avatar : initialsOf(me.user.name))}</span>
+          <div><div class="ph-name">${esc(name)}</div><div class="ph-mail">${esc(me.user.email)}</div></div>
         </div>
         <div class="pop-sep"></div>
-        <a class="pop-item" href="#/channel/orchardtech"><svg class="ic"><use href="#i-user"/></svg>Ваш канал</a>
-        <button class="pop-item"><svg class="ic"><use href="#i-settings"/></svg>Orchard Studio</button>
+        ${me.channel
+          ? `<a class="pop-item" href="#/channel/${esc(me.channel.id)}"><svg class="ic"><use href="#i-user"/></svg>Ваш канал</a>
+             <button class="pop-item" id="popEditCh"><svg class="ic"><use href="#i-settings"/></svg>Настроить канал</button>`
+          : `<button class="pop-item" id="popCreateCh"><svg class="ic"><use href="#i-plus"/></svg>Создать канал</button>`}
         <button class="pop-item" id="popTheme"><svg class="ic"><use href="#i-moon"/></svg>Сменить тему</button>
         <div class="pop-sep"></div>
-        <button class="pop-item"><svg class="ic"><use href="#i-close"/></svg>Выйти</button>
+        <button class="pop-item" id="popLogout"><svg class="ic"><use href="#i-close"/></svg>Выйти</button>
       `);
-      const t = $('#popTheme');
-      if (t) t.addEventListener('click', () => { closePopover(); toggleTheme(); });
+      const on = (id, fn) => { const b = $('#' + id); if (b) b.addEventListener('click', () => { closePopover(); fn(); }); };
+      on('popTheme', toggleTheme);
+      on('popEditCh', () => openChannelModal('edit'));
+      on('popCreateCh', () => openChannelModal('create'));
+      on('popLogout', logout);
     });
 
     $('#settingsBtn').addEventListener('click', openSettings);
@@ -1692,12 +1249,9 @@
 
   const fileSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' МБ' : Math.max(1, Math.round(n / 1024)) + ' КБ');
 
-  function uploadHeaders() {
-    return state.uploadToken ? { 'x-upload-token': state.uploadToken } : {};
-  }
-
   function openUpload() {
-    const canUpload = api.upload;
+    if (!requireChannel()) return;
+    const canUpload = true;
     const cats = CHIP_CATS.filter((c) => c !== 'Все' && c !== 'Прямые трансляции');
     openModal(`
       <div class="modal-head">
@@ -1705,7 +1259,6 @@
         <button class="icon-btn" data-close aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
       </div>
       <form id="uploadForm">
-        ${canUpload ? '' : `<div class="upload-note">Загрузка недоступна: сервер работает без базы данных. Подключите MongoDB (переменная <code>MONGODB_URI</code>) и откройте сайт через сервер.</div>`}
         <div class="upload-drop" id="dropZone" tabindex="0" role="button">
           <svg class="ic"><use href="#i-upload"/></svg>
           <b id="dropTitle">Перетащите видео сюда</b>
@@ -1724,10 +1277,6 @@
           <label class="form-label" for="upCat">Категория</label>
           <select class="form-select" id="upCat">${cats.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
         </div>
-        ${api.tokenRequired ? `<div class="form-row">
-          <label class="form-label" for="upToken">Ключ загрузки</label>
-          <input class="form-input" id="upToken" type="password" autocomplete="off" value="${esc(state.uploadToken)}" placeholder="Задан администратором сайта">
-        </div>` : ''}
         <div class="upload-progress" id="upProgress" hidden><i id="upBar"></i></div>
         <div class="modal-actions">
           <button type="button" class="btn" data-close>Отмена</button>
@@ -1770,8 +1319,6 @@
       e.preventDefault();
       if (!canUpload || xhr) return;
       if (!chosen) { toast('Сначала выберите видеофайл'); return; }
-      const tokenInput = $('#upToken');
-      if (tokenInput) { state.uploadToken = tokenInput.value.trim(); saveState(); }
 
       const fd = new FormData();
       fd.append('title', $('#upTitle').value.trim());
@@ -1783,7 +1330,6 @@
 
       xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/videos');
-      Object.entries(uploadHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v));
       const prog = $('#upProgress'), bar = $('#upBar');
       prog.hidden = false;
       submit.disabled = true;
@@ -1804,12 +1350,17 @@
         try { data = JSON.parse(xhr.responseText); } catch (err) { /* не JSON */ }
         if (xhr.status === 201 && data && data.video) {
           VIDEOS.unshift(data.video);
+          if (me && me.channel && CHANNELS[me.channel.id]) CHANNELS[me.channel.id].videoCount = (CHANNELS[me.channel.id].videoCount || 0) + 1;
           xhr = null;
           closeModal();
           toast('Видео опубликовано');
           location.hash = '#/watch/' + data.video.id;
         } else if (xhr.status === 401) {
-          reset('Неверный ключ загрузки');
+          reset('Сессия истекла — войдите снова');
+          applyMe(null); renderAuthUI(); renderSideChannels(); openLogin();
+        } else if (xhr.status === 403 && data && data.error === 'no-channel') {
+          reset('Сначала создайте канал');
+          openChannelModal('create');
         } else {
           reset((data && data.message) || 'Не удалось загрузить видео');
         }
@@ -1830,14 +1381,6 @@
           <option value="dark" ${state.theme === 'dark' ? 'selected' : ''}>Тёмная (по умолчанию)</option>
           <option value="light" ${state.theme === 'light' ? 'selected' : ''}>Светлая</option>
         </select>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Автовоспроизведение</label>
-        <select class="form-select"><option>Включено</option><option>Выключено</option></select>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Качество видео</label>
-        <select class="form-select"><option>Авто</option><option>1080p</option><option>720p</option><option>480p</option></select>
       </div>
       <div class="form-hint">Настройки сохраняются в этом браузере.</div>
       <div class="modal-actions">
@@ -1867,6 +1410,155 @@
     `);
   }
 
+  /* ---------------- вход через Google и канал ---------------- */
+  let gsiPromise = null;
+  function loadGsi() {
+    if (window.google && window.google.accounts) return Promise.resolve();
+    if (!gsiPromise) {
+      gsiPromise = new Promise((resolve, reject) => {
+        const sc = document.createElement('script');
+        sc.src = 'https://accounts.google.com/gsi/client';
+        sc.async = true;
+        sc.onload = resolve;
+        sc.onerror = () => { gsiPromise = null; reject(new Error('gsi')); };
+        document.head.appendChild(sc);
+      });
+    }
+    return gsiPromise;
+  }
+
+  function renderAuthUI() {
+    const login = $('#loginBtn');
+    const av = $('#avatarBtn');
+    if (!login || !av) return;
+    login.hidden = !!me;
+    av.hidden = !me;
+    if (me) av.textContent = me.channel ? me.channel.avatar : initialsOf(me.user.name);
+  }
+
+  function requireLogin(reason) {
+    if (me) return true;
+    openLogin(reason);
+    return false;
+  }
+
+  function requireChannel() {
+    if (!requireLogin('Войдите через Google, чтобы загружать видео и вести свой канал.')) return false;
+    if (!me.channel) { openChannelModal('create'); return false; }
+    return true;
+  }
+
+  function openLogin(reason) {
+    openModal(`
+      <div class="modal-head">
+        <div><h2>Вход в OrchardTube</h2><p>${esc(reason || 'Войдите через аккаунт Google (Gmail): так вы сможете создать свой канал, загружать видео, ставить лайки и писать комментарии.')}</p></div>
+        <button class="icon-btn" data-close aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="gsi-box" id="gsiBtn"></div>
+      <div class="form-hint" id="gsiNote">Мы получаем только имя и адрес почты. Пароль от Google нам не передаётся.</div>
+    `);
+    if (!api.googleClientId) {
+      $('#gsiNote').textContent = 'Вход пока не настроен: владельцу сайта нужно задать GOOGLE_CLIENT_ID на сервере.';
+      return;
+    }
+    loadGsi().then(() => {
+      const box = $('#gsiBtn');
+      if (!box) return; // окно уже закрыли
+      window.google.accounts.id.initialize({ client_id: api.googleClientId, callback: onGoogleCredential });
+      window.google.accounts.id.renderButton(box, {
+        theme: state.theme === 'dark' ? 'filled_black' : 'outline', size: 'large', text: 'continue_with', shape: 'pill', locale: 'ru', width: 280
+      });
+    }).catch(() => {
+      const n = $('#gsiNote');
+      if (n) n.textContent = 'Не удалось загрузить вход Google. Проверьте соединение или отключите блокировщик рекламы.';
+    });
+  }
+
+  async function onGoogleCredential(resp) {
+    try {
+      const r = await jsonPost('/api/auth/google', { credential: resp.credential }, 'POST', 20000);
+      if (!r.ok || !r.data || !r.data.user) throw new Error((r.data && r.data.message) || 'Не удалось войти');
+      applyMe(r.data);
+      renderAuthUI();
+      renderSideChannels();
+      closeModal();
+      if (!me.channel) openChannelModal('create');
+      else { toast(`С возвращением, ${me.channel.name}!`); render(); }
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+
+  async function logout() {
+    await jsonPost('/api/auth/logout', {}, 'POST', 8000).catch(() => {});
+    applyMe(null);
+    renderAuthUI();
+    renderSideChannels();
+    toast('Вы вышли из аккаунта');
+    render();
+  }
+
+  function openChannelModal(mode) {
+    if (!me) { openLogin(); return; }
+    const edit = mode === 'edit' && !!me.channel;
+    const ch = edit ? me.channel : { name: me.user.name || '', id: '', description: '' };
+    const suggest = String(me.user.email || '').split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 30);
+    openModal(`
+      <div class="modal-head">
+        <div><h2>${edit ? 'Настройки канала' : 'Создайте свой канал'}</h2><p>${edit ? 'Название и описание видят все зрители.' : 'Так вас увидят зрители. Адрес канала потом изменить нельзя.'}</p></div>
+        <button class="icon-btn" data-close aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+      </div>
+      <form id="chForm">
+        <div class="form-row">
+          <label class="form-label" for="chName">Название канала</label>
+          <input class="form-input" id="chName" maxlength="50" required value="${esc(ch.name)}">
+        </div>
+        ${edit
+          ? `<div class="form-row"><label class="form-label">Адрес канала</label><div class="form-hint">${esc(ch.handle)}</div></div>`
+          : `<div class="form-row">
+              <label class="form-label" for="chHandle">Адрес канала</label>
+              <input class="form-input" id="chHandle" maxlength="30" required pattern="[A-Za-z0-9_]{3,30}" autocomplete="off" value="${esc(suggest.length >= 3 ? suggest : '')}" placeholder="my_channel">
+              <div class="form-hint">Латиница, цифры и «_», от 3 до 30 символов. Ссылка: @<span id="chHandlePrev"></span></div>
+            </div>`}
+        <div class="form-row">
+          <label class="form-label" for="chDescr">Описание</label>
+          <textarea class="form-textarea" id="chDescr" maxlength="1000" placeholder="О чём ваш канал">${esc(ch.description)}</textarea>
+        </div>
+        <div class="modal-actions">
+          ${edit ? '<button type="button" class="btn" data-close>Отмена</button>' : ''}
+          <button type="submit" class="btn btn-primary" id="chSubmit">${edit ? 'Сохранить' : 'Создать канал'}</button>
+        </div>
+      </form>
+    `);
+    const hInput = $('#chHandle');
+    if (hInput) {
+      const prev = () => { $('#chHandlePrev').textContent = hInput.value.toLowerCase() || '…'; };
+      hInput.addEventListener('input', prev);
+      prev();
+    }
+    $('#chForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = $('#chSubmit');
+      btn.disabled = true;
+      try {
+        const body = { name: $('#chName').value.trim(), description: $('#chDescr').value.trim() };
+        if (!edit) body.handle = $('#chHandle').value.trim();
+        const r = await jsonPost('/api/channel', body, edit ? 'PATCH' : 'POST', 15000);
+        if (!r.ok || !r.data || !r.data.channel) throw new Error((r.data && r.data.message) || 'Не удалось сохранить канал');
+        me.channel = r.data.channel;
+        CHANNELS[me.channel.id] = me.channel;
+        renderAuthUI();
+        renderSideChannels();
+        closeModal();
+        toast(edit ? 'Канал обновлён' : 'Канал создан — добро пожаловать!');
+        if (edit) render(); else location.hash = '#/channel/' + me.channel.id;
+      } catch (err) {
+        toast(err.message);
+        btn.disabled = false;
+      }
+    });
+  }
+
   /* ---------------- старт ---------------- */
   let started = false;
   function init() {
@@ -1874,9 +1566,13 @@
     started = true;
     applyTheme();
     initTopbar();
-    if (/^https?:$/.test(location.protocol)) main.innerHTML = '<p class="boot-note">Загружаем OrchardTube…</p>';
-    // Сначала пробуем сервер (быстро: при недоступности падаем на data.js), затем рисуем
+    main.innerHTML = '<p class="boot-note">Загружаем OrchardTube…<br><small>Бесплатный сервер может просыпаться до минуты.</small></p>';
     loadRemote().then(() => {
+      if (!api.online) {
+        main.innerHTML = `<div class="empty"><div class="empty-emoji">🔌</div><h2>Сервер недоступен</h2><p>Не удалось загрузить данные. Проверьте соединение и попробуйте ещё раз.</p><button class="btn btn-primary" onclick="location.reload()">Обновить страницу</button></div>`;
+        return;
+      }
+      renderAuthUI();
       renderSideChannels();
       render();
       window.addEventListener('hashchange', render);

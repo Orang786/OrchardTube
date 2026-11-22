@@ -14,7 +14,9 @@ services:
         sync: false
       - key: MONGODB_DB
         value: orchardtube
-      - key: UPLOAD_TOKEN       # ключ для загрузки/удаления видео (сгенерируется автоматически)
+      - key: GOOGLE_CLIENT_ID   # OAuth Client ID из Google Cloud Console — задать в панели Render
+        sync: false
+      - key: SESSION_SECRET     # ключ подписи сессий (сгенерируется автоматически)
         generateValue: true
       - key: MAX_UPLOAD_MB
         value: 100
