@@ -120,7 +120,11 @@ function channelView(ch, stats) {
     joined: new Date(ch.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }),
     viewsNum: s.views,
     videoCount: s.count,
-    description: ch.description || ''
+    description: ch.description || '',
+    avatarUrl: ch.avatarId ? '/api/media/' + ch.avatarId : '',
+    bannerUrl: ch.bannerId ? '/api/media/' + ch.bannerId : '',
+    links: Array.isArray(ch.links) ? ch.links : [],
+    joinedAt: ch.createdAt
   };
 }
 
@@ -212,7 +216,35 @@ async function createChannel(sub, { name, handle, description }) {
   return getChannelView(handle);
 }
 
-async function updateChannel(sub, { name, description }) {
+function cleanLinks(links) {
+  if (!Array.isArray(links)) throw new HttpError(400, 'Некорректный список ссылок');
+  const out = [];
+  for (const l of links.slice(0, 5)) {
+    const title = String(l && l.title || '').trim().slice(0, 30);
+    let url = String(l && l.url || '').trim();
+    if (!title && !url) continue;
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    let u;
+    try { u = new URL(url); } catch (e) { throw new HttpError(400, 'Некорректная ссылка: ' + url.slice(0, 60)); }
+    if (!/^https?:$/.test(u.protocol) || !u.hostname.includes('.')) throw new HttpError(400, 'Некорректная ссылка: ' + url.slice(0, 60));
+    if (url.length > 200) throw new HttpError(400, 'Ссылка слишком длинная');
+    out.push({ title: title || u.hostname.replace(/^www\./, ''), url: u.href });
+  }
+  return out;
+}
+
+// kind: 'avatar' | 'banner'; mediaId '' — убрать картинку
+async function setChannelImage(sub, kind, mediaId) {
+  const user = await getUser(sub);
+  if (!user || !user.channelId) { if (mediaId) await deleteMedia(mediaId); throw new HttpError(404, 'Канал не найден'); }
+  const field = kind === 'avatar' ? 'avatarId' : 'bannerId';
+  const ch = await col('channels').findOne({ _id: user.channelId });
+  if (ch && ch[field]) await deleteMedia(ch[field]);
+  await col('channels').updateOne({ _id: user.channelId }, mediaId ? { $set: { [field]: mediaId } } : { $unset: { [field]: '' } });
+  return getChannelView(user.channelId);
+}
+
+async function updateChannel(sub, { name, description, links }) {
   const user = await getUser(sub);
   if (!user || !user.channelId) throw new HttpError(404, 'Канал не найден');
   const set = {};
@@ -222,6 +254,7 @@ async function updateChannel(sub, { name, description }) {
     set.name = name;
   }
   if (description !== undefined) set.description = String(description).trim().slice(0, 1000);
+  if (links !== undefined) set.links = cleanLinks(links);
   if (Object.keys(set).length) await col('channels').updateOne({ _id: user.channelId }, { $set: set });
   return getChannelView(user.channelId);
 }
@@ -690,7 +723,7 @@ async function adminAudit() {
 
 module.exports = {
   RANK, roleOf, rankOf, isOwnerEmail, audit,
-  getVideoFor, updateVideo, setThumbnail, videoOfMedia,
+  setChannelImage, getVideoFor, updateVideo, setThumbnail, videoOfMedia,
   studioVideos, studioComments, studioAnalytics, studioOverview,
   adminOverview, adminUsers, adminInvites, adminSetRole, adminGrantByEmail, adminCancelInvite, adminBan,
   adminVideos, adminModerateDeleteVideo, adminComments, adminModerateDeleteComment, adminAudit,

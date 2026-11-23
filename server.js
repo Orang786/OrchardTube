@@ -93,7 +93,7 @@ function receiveImage(req, field, limit) {
       try {
         if (!p) return reject(new store.HttpError(400, 'Нужна картинка JPG, PNG или WebP'));
         const id = await p;
-        if (tooBig) { await store.deleteMedia(id); return reject(new store.HttpError(413, 'Файл слишком большой (до 2 МБ)')); }
+        if (tooBig) { await store.deleteMedia(id); return reject(new store.HttpError(413, 'Файл слишком большой')); }
         resolve(id);
       } catch (e) { reject(e); }
     });
@@ -143,8 +143,22 @@ app.post('/api/channel', auth.requireAuth, limited('channel', 5, 3600e3), wrap(a
 }));
 
 app.patch('/api/channel', auth.requireAuth, wrap(async (req, res) => {
-  const { name, description } = req.body || {};
-  res.json({ channel: await store.updateChannel(req.sub, { name, description }) });
+  const { name, description, links } = req.body || {};
+  res.json({ channel: await store.updateChannel(req.sub, { name, description, links }) });
+}));
+
+// Аватар и баннер канала
+const IMG_KINDS = { avatar: 2 * 1024 * 1024, banner: 4 * 1024 * 1024 };
+app.post('/api/channel/image/:kind', auth.requireAuth, limited('chimg', 20, 3600e3), wrap(async (req, res) => {
+  const kind = String(req.params.kind);
+  if (!IMG_KINDS[kind]) return res.status(404).json({ error: 'not-found' });
+  const id = await receiveImage(req, 'image', IMG_KINDS[kind]);
+  res.json({ channel: await store.setChannelImage(req.sub, kind, id) });
+}));
+app.delete('/api/channel/image/:kind', auth.requireAuth, wrap(async (req, res) => {
+  const kind = String(req.params.kind);
+  if (!IMG_KINDS[kind]) return res.status(404).json({ error: 'not-found' });
+  res.json({ channel: await store.setChannelImage(req.sub, kind, '') });
 }));
 
 /* ---------- видео ---------- */

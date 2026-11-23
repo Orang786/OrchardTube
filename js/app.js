@@ -127,7 +127,9 @@
 
   function chOf(v) { return CHANNELS[v.channel] || { name: 'Канал удалён', avatar: '?', color: '#777', subs: '0', id: v.channel }; }
   function avatarHtml(ch, size) {
-    return `<span class="ch-avatar" style="background:${ch.color};${size ? `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px` : ''}">${esc(ch.avatar)}</span>`;
+    const st = `background:${ch.color};${size ? `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px` : ''}`;
+    if (ch.avatarUrl) return `<span class="ch-avatar" style="${st}"><img src="${esc(ch.avatarUrl)}" alt="" loading="lazy"></span>`;
+    return `<span class="ch-avatar" style="${st}">${esc(ch.avatar)}</span>`;
   }
   function thumbArt(v) {
     if (v.thumb) {
@@ -488,66 +490,134 @@
       </div>`;
   }
 
+  function carousel(cards) {
+    return `<div class="car"><button class="car-btn prev" aria-label="Назад" hidden>&#8249;</button><div class="car-track">${cards}</div><button class="car-btn next" aria-label="Вперёд" hidden>&#8250;</button></div>`;
+  }
+
+  function sortVideos(list, sort) {
+    const a = list.slice();
+    if (sort === 'popular') a.sort((x, y) => (y.views || 0) - (x.views || 0));
+    else if (sort === 'old') a.sort((x, y) => new Date(x.at) - new Date(y.at));
+    else a.sort((x, y) => new Date(y.at) - new Date(x.at));
+    return a;
+  }
+
+  function linkHost(u) { try { return new URL(u).host.replace(/^www\./, '') + (new URL(u).pathname.length > 1 ? new URL(u).pathname : ''); } catch (e) { return u; } }
+
   function pageChannel(chId, tab) {
     const ch = CHANNELS[chId];
     if (!ch) return emptyHtml('🍊', 'Канал не найден', 'Возможно, ссылка устарела.');
+    const { params } = parseRoute();
     const list = VIDEOS.filter((v) => v.channel === chId);
     const isSub = state.subs.has(chId);
     const own = !!(me && me.channel && me.channel.id === chId);
-    const activeTab = tab === 'about' ? 'about' : 'videos';
-    const tabs = [['videos', 'Видео'], ['about', 'О канале']];
+    const activeTab = ['videos', 'about', 'search'].includes(tab) ? tab : 'home';
+    const base = '#/channel/' + esc(chId);
+    const tabs = [['home', 'Главная', base], ['videos', 'Видео', base + '/videos'], ['about', 'О канале', base + '/about']];
+    const links = ch.links || [];
+    const q = (params.get('q') || '').trim();
+    const sort = ['popular', 'old'].includes(params.get('sort')) ? params.get('sort') : 'new';
+
+    const emptyOwn = () => emptyHtml('🎬', 'Пока нет видео', own ? 'Загрузите первое видео на свой канал.' : 'Канал ещё не загрузил ни одного видео.', own ? { label: 'Загрузить видео', id: 'emptyUpload' } : undefined);
 
     let content = '';
-    if (activeTab === 'videos') {
+    if (activeTab === 'home') {
+      if (!list.length) content = emptyOwn();
+      else {
+        const fresh = sortVideos(list, 'new');
+        const pop = sortVideos(list, 'popular');
+        const featured = fresh[0];
+        content = `<div class="chan-cards">
+          <section class="ch-sec"><h2 class="ch-sec-title">Для вас</h2>${carousel(fresh.slice(0, 16).map(videoCard).join(''))}</section>
+          ${list.length > 3 ? `<section class="ch-sec"><h2 class="ch-sec-title">Популярные видео</h2>${carousel(pop.slice(0, 16).map(videoCard).join(''))}</section>` : ''}
+          <section class="ch-sec"><div class="ch-sec-head"><h2 class="ch-sec-title">Видео</h2><a class="ch-sec-more" href="${base}/videos">Смотреть все</a></div>${carousel(fresh.map(videoCard).join(''))}</section>
+        </div>`;
+        void featured;
+      }
+    } else if (activeTab === 'videos') {
+      const sorted = sortVideos(list, sort);
       content = list.length
-        ? `<div class="video-grid">${list.map(videoCard).join('')}</div>`
-        : emptyHtml('🎬', 'Пока нет видео', own ? 'Загрузите первое видео на свой канал.' : 'Канал ещё не загрузил ни одного видео.', own ? { label: 'Загрузить видео', id: 'emptyUpload' } : undefined);
+        ? `<div class="chips-wrap ch-sort"><div class="chips">${[['new', 'Новые'], ['popular', 'Популярные'], ['old', 'Старые']].map(([k, l]) => `<a class="chip ${k === sort ? 'active' : ''}" href="${base}/videos${k === 'new' ? '' : '?sort=' + k}">${l}</a>`).join('')}</div></div>
+           <div class="video-grid chan-cards">${sorted.map(videoCard).join('')}</div>`
+        : emptyOwn();
+    } else if (activeTab === 'search') {
+      const found = q ? list.filter((v) => (v.title + ' ' + (v.desc || '')).toLowerCase().includes(q.toLowerCase())) : [];
+      content = !q ? '<p class="muted-note">Введите запрос, чтобы найти видео на этом канале.</p>'
+        : found.length ? `<div class="video-grid chan-cards">${found.map(videoCard).join('')}</div>`
+        : emptyHtml('🔍', 'Ничего не найдено', 'Попробуйте изменить запрос.');
     } else {
       content = `<div class="channel-about">
-        <div class="about-block">
-          <h3>Описание</h3>
-          <p>${ch.description ? esc(ch.description) : 'Автор пока ничего не рассказал о канале.'}</p>
-        </div>
-        <div class="about-block">
-          <h3>Статистика</h3>
-          <div class="about-stats">
-            <div><b class="ch-subs-count-num">${esc(ch.subs)}</b>подписчиков</div>
-            <div><b>${fmt(ch.videoCount)}</b>видео</div>
-            <div><b>${fmt(ch.viewsNum)}</b>просмотров</div>
-          </div>
-        </div>
-        <div class="about-block">
-          <h3>Подробности</h3>
-          <p>Присоединился: ${esc(ch.joined)}</p>
-        </div>
+        <div class="about-block"><h3>Описание</h3><p>${ch.description ? esc(ch.description) : 'Автор пока ничего не рассказал о канале.'}</p></div>
+        ${links.length ? `<div class="about-block"><h3>Ссылки</h3><div class="about-links">${links.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow"><b>${esc(l.title)}</b><span>${esc(linkHost(l.url))}</span></a>`).join('')}</div></div>` : ''}
+        <div class="about-block"><h3>Статистика</h3><div class="about-stats">
+          <div><b class="ch-subs-count-num">${esc(ch.subs)}</b>подписчиков</div><div><b>${fmt(ch.videoCount)}</b>видео</div><div><b>${fmt(ch.viewsNum)}</b>просмотров</div></div></div>
+        <div class="about-block"><h3>Подробности</h3><p>Присоединился: ${esc(ch.joined)}</p></div>
       </div>`;
     }
 
+    const bannerStyle = ch.bannerUrl ? '' : `background:linear-gradient(120deg, ${ch.banner[0]}, ${ch.banner[1]})`;
+    const descLine = ch.description ? ch.description.split('\n')[0] : '';
     return `
-      <div class="channel-banner" style="background:linear-gradient(120deg, ${ch.banner[0]}, ${ch.banner[1]})">
-        <span class="banner-mark">${esc(ch.avatar)}</span>
+      <div class="channel-banner ${ch.bannerUrl ? 'has-img' : ''}" style="${bannerStyle}">
+        ${ch.bannerUrl ? `<img src="${esc(ch.bannerUrl)}" alt="">` : `<span class="banner-mark">${esc(ch.avatar)}</span>`}
       </div>
       <div class="channel-head">
         ${avatarHtml(ch)}
         <div class="channel-info">
           <h1>${esc(ch.name)}</h1>
           <div class="channel-stats">
-            <span>${esc(ch.handle)}</span><span class="dot">●</span>
+            <b>${esc(ch.handle)}</b><span class="dot">●</span>
             <span><span class="ch-subs-count">${esc(ch.subs)} подписчиков</span></span><span class="dot">●</span>
-            <span>${fmt(ch.videoCount)} видео</span>
+            <span>${fmt(ch.videoCount)} ${plural(ch.videoCount, 'видео', 'видео', 'видео')}</span>
           </div>
-          ${ch.description ? `<div class="channel-desc" id="chDesc">${esc(ch.description)}</div><button class="channel-more" id="chMore">Ещё</button>` : ''}
+          <button class="channel-descline" id="chAbout"><span class="cd-text">${descLine ? esc(descLine) : 'Подробнее о канале'}</span> <b>…ещё</b></button>
+          ${links.length ? `<div class="channel-linkline"><a href="${esc(links[0].url)}" target="_blank" rel="noopener noreferrer nofollow">${esc(linkHost(links[0].url))}</a>${links.length > 1 ? ` и <button class="link-more" id="chLinks">ещё ${links.length - 1} ${plural(links.length - 1, 'ссылка', 'ссылки', 'ссылок')}</button>` : ''}</div>` : ''}
           <div class="channel-actions">
             ${own
-              ? `<button class="btn" id="chEdit">Настроить канал</button><button class="btn btn-primary" id="chUpload">Загрузить видео</button>`
+              ? `<button class="btn" id="chEdit">Настроить вид канала</button><a class="btn" href="/studio#/content">Управление видео</a>`
               : `<button class="subscribe-btn ${isSub ? 'subscribed' : ''}" data-sub="${esc(chId)}">${isSub ? 'Вы подписаны' : 'Подписаться'}</button>`}
           </div>
         </div>
       </div>
       <div class="channel-tabs">
-        ${tabs.map(([id, label]) => `<a class="channel-tab ${id === activeTab ? 'active' : ''}" href="#/channel/${esc(chId)}/${id}">${label}</a>`).join('')}
+        ${tabs.map(([id, label, href]) => `<a class="channel-tab ${id === activeTab ? 'active' : ''}" href="${href}">${label}</a>`).join('')}
+        <form class="chan-search ${activeTab === 'search' ? 'open' : ''}" id="chSearch"><button type="button" class="icon-btn" id="chSearchBtn" aria-label="Поиск по каналу"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg></button><input id="chSearchInp" type="text" placeholder="Поиск по каналу" value="${esc(q)}" autocomplete="off"></form>
       </div>
       ${content}`;
+  }
+
+  function openChannelAbout(chId) {
+    const ch = CHANNELS[chId];
+    if (!ch) return;
+    const links = ch.links || [];
+    openModal(`
+      <div class="modal-head"><div><h2>${esc(ch.name)}</h2></div><button class="icon-btn" data-close aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button></div>
+      <div class="about-modal">
+        ${ch.description ? `<p class="am-desc">${esc(ch.description)}</p>` : ''}
+        ${links.length ? `<h3>Ссылки</h3>${links.map((l) => `<a class="am-row" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow"><svg class="ic"><use href="#i-link"/></svg><div><b>${esc(l.title)}</b><span>${esc(linkHost(l.url))}</span></div></a>`).join('')}` : ''}
+        <h3>Дополнительная информация</h3>
+        <div class="am-row"><svg class="ic"><use href="#i-info"/></svg><div>Дата регистрации: ${esc(ch.joined)}</div></div>
+        <div class="am-row"><svg class="ic"><use href="#i-user"/></svg><div>${esc(ch.subs)} подписчиков</div></div>
+        <div class="am-row"><svg class="ic"><use href="#i-play"/></svg><div>${fmt(ch.videoCount)} видео</div></div>
+        <div class="am-row"><svg class="ic"><use href="#i-eye"/></svg><div>${fmt(ch.viewsNum)} просмотров</div></div>
+        <button class="btn" id="amShare"><svg class="ic"><use href="#i-share"/></svg>Поделиться каналом</button>
+      </div>`);
+    $('#amShare').addEventListener('click', async () => {
+      const url = location.origin + '/#/channel/' + ch.id;
+      try { await navigator.clipboard.writeText(url); toast('Ссылка на канал скопирована'); } catch (e) { toast(url); }
+    });
+  }
+
+  function bindCarousels() {
+    $$('.car').forEach((car) => {
+      const tr = $('.car-track', car), prev = $('.prev', car), next = $('.next', car);
+      const upd = () => { prev.hidden = tr.scrollLeft < 8; next.hidden = tr.scrollLeft + tr.clientWidth >= tr.scrollWidth - 8; };
+      prev.addEventListener('click', () => tr.scrollBy({ left: -tr.clientWidth * 0.9, behavior: 'smooth' }));
+      next.addEventListener('click', () => tr.scrollBy({ left: tr.clientWidth * 0.9, behavior: 'smooth' }));
+      tr.addEventListener('scroll', upd, { passive: true });
+      upd();
+      setTimeout(upd, 200);
+    });
   }
 
 
@@ -1054,13 +1124,16 @@
     }
 
     if (page === 'channel') {
-      const more = $('#chMore');
-      const desc = $('#chDesc');
-      if (more && desc) {
-        more.addEventListener('click', () => {
-          desc.classList.toggle('open');
-          more.textContent = desc.classList.contains('open') ? 'Свернуть' : 'Ещё';
-        });
+      const chId = parts[1];
+      const ab = $('#chAbout'); if (ab) ab.addEventListener('click', () => openChannelAbout(chId));
+      const lk = $('#chLinks'); if (lk) lk.addEventListener('click', () => openChannelAbout(chId));
+      bindCarousels();
+      const sf = $('#chSearch');
+      if (sf) {
+        const inp = $('#chSearchInp');
+        $('#chSearchBtn').addEventListener('click', () => { sf.classList.add('open'); inp.focus(); });
+        sf.addEventListener('submit', (e) => { e.preventDefault(); location.hash = '#/channel/' + chId + '/search?q=' + encodeURIComponent(inp.value.trim()); });
+        if (sf.classList.contains('open') && !inp.value) setTimeout(() => inp.focus(), 0);
       }
       const edit = $('#chEdit');
       if (edit) edit.addEventListener('click', () => openChannelModal('edit'));
@@ -1528,6 +1601,16 @@
         <button class="icon-btn" data-close aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
       </div>
       <form id="chForm">
+        ${edit ? `
+        <div class="form-row"><label class="form-label">Баннер</label>
+          <div class="cs-img"><div class="cs-prev" id="csBanPrev" style="width:186px;height:30px">${ch.bannerUrl ? `<img src="${esc(ch.bannerUrl)}" alt="">` : ''}</div>
+          <div class="cs-btns"><button type="button" class="btn" id="csBanUp">Загрузить</button><button type="button" class="btn" id="csBanDel" ${ch.bannerUrl ? '' : 'hidden'}>Удалить</button></div></div>
+          <div class="form-hint">Рекомендуем 2048×330 пикселей, JPG, PNG или WebP до 4 МБ.</div></div>
+        <div class="form-row"><label class="form-label">Фото профиля</label>
+          <div class="cs-img"><div class="cs-prev" id="csAvaPrev" style="width:72px;height:72px;border-radius:50%;background:${esc(ch.color)}">${ch.avatarUrl ? `<img src="${esc(ch.avatarUrl)}" alt="">` : esc(ch.avatar)}</div>
+          <div class="cs-btns"><button type="button" class="btn" id="csAvaUp">Загрузить</button><button type="button" class="btn" id="csAvaDel" ${ch.avatarUrl ? '' : 'hidden'}>Удалить</button></div></div>
+          <div class="form-hint">Квадратное изображение, до 2 МБ.</div></div>
+        <input type="file" id="csFile" accept="image/jpeg,image/png,image/webp" hidden>` : ''}
         <div class="form-row">
           <label class="form-label" for="chName">Название канала</label>
           <input class="form-input" id="chName" maxlength="50" required value="${esc(ch.name)}">
@@ -1543,6 +1626,7 @@
           <label class="form-label" for="chDescr">Описание</label>
           <textarea class="form-textarea" id="chDescr" maxlength="1000" placeholder="О чём ваш канал">${esc(ch.description)}</textarea>
         </div>
+        ${edit ? `<div class="form-row"><label class="form-label">Ссылки (до 5)</label>${[0, 1, 2, 3, 4].map((i) => `<div class="cs-link"><input class="form-input" data-lt="${i}" maxlength="30" placeholder="Название" value="${esc((ch.links && ch.links[i] && ch.links[i].title) || '')}"><input class="form-input" data-lu="${i}" maxlength="200" placeholder="https://…" value="${esc((ch.links && ch.links[i] && ch.links[i].url) || '')}"></div>`).join('')}</div>` : ''}
         <div class="modal-actions">
           ${edit ? '<button type="button" class="btn" data-close>Отмена</button>' : ''}
           <button type="submit" class="btn btn-primary" id="chSubmit">${edit ? 'Сохранить' : 'Создать канал'}</button>
@@ -1555,12 +1639,42 @@
       hInput.addEventListener('input', prev);
       prev();
     }
+    if (edit) {
+      let kind = '';
+      const file = $('#csFile');
+      const apply = (ch2) => {
+        me.channel = ch2; CHANNELS[ch2.id] = ch2; renderAuthUI(); renderSideChannels();
+        $('#csBanPrev').innerHTML = ch2.bannerUrl ? `<img src="${esc(ch2.bannerUrl)}?t=${Date.now()}" alt="">` : '';
+        $('#csAvaPrev').innerHTML = ch2.avatarUrl ? `<img src="${esc(ch2.avatarUrl)}?t=${Date.now()}" alt="">` : esc(ch2.avatar);
+        $('#csBanDel').hidden = !ch2.bannerUrl; $('#csAvaDel').hidden = !ch2.avatarUrl;
+      };
+      $('#csBanUp').addEventListener('click', () => { kind = 'banner'; file.click(); });
+      $('#csAvaUp').addEventListener('click', () => { kind = 'avatar'; file.click(); });
+      file.addEventListener('change', async () => {
+        const f = file.files[0]; file.value = '';
+        if (!f) return;
+        if (f.size > (kind === 'banner' ? 4 : 2) * 1048576) { toast('Файл слишком большой'); return; }
+        const fd = new FormData(); fd.append('image', f);
+        try {
+          const r = await fetch('/api/channel/image/' + kind, { method: 'POST', body: fd, credentials: 'same-origin' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(d.message || 'Не удалось загрузить');
+          apply(d.channel); toast('Сохранено');
+        } catch (err) { toast(err.message); }
+      });
+      const del = (k) => async () => {
+        try { const r = await fetch('/api/channel/image/' + k, { method: 'DELETE', credentials: 'same-origin' }); const d = await r.json(); if (!r.ok) throw new Error(d.message); apply(d.channel); } catch (err) { toast(err.message || 'Ошибка'); }
+      };
+      $('#csBanDel').addEventListener('click', del('banner'));
+      $('#csAvaDel').addEventListener('click', del('avatar'));
+    }
     $('#chForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const btn = $('#chSubmit');
       btn.disabled = true;
       try {
         const body = { name: $('#chName').value.trim(), description: $('#chDescr').value.trim() };
+        if (edit) body.links = [0, 1, 2, 3, 4].map((i) => ({ title: $(`[data-lt="${i}"]`).value, url: $(`[data-lu="${i}"]`).value }));
         if (!edit) body.handle = $('#chHandle').value.trim();
         const r = await jsonPost('/api/channel', body, edit ? 'PATCH' : 'POST', 15000);
         if (!r.ok || !r.data || !r.data.channel) throw new Error((r.data && r.data.message) || 'Не удалось сохранить канал');

@@ -1580,3 +1580,69 @@ html[data-theme="light"] .chip:hover { background: #e5e5e5; }
   .topbar-right { justify-self: end; margin-left: 0; }
   .search { margin: 0; width: 100%; max-width: none; }
 }
+
+/* ---------- Страница канала в стиле YouTube ---------- */
+.ch-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
+.channel-banner { height: auto; aspect-ratio: 6.2 / 1; min-height: 110px; max-height: 260px; }
+.channel-banner.has-img::after { display: none; }
+.channel-banner img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.channel-head { gap: 24px; margin-bottom: 20px; flex-wrap: nowrap; }
+.channel-head .ch-avatar { width: 160px; height: 160px; font-size: 56px; box-shadow: none; overflow: hidden; }
+.channel-info h1 { font-size: 36px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.5px; }
+.channel-stats { font-size: 14px; margin-bottom: 8px; }
+.channel-stats b { color: var(--fg); font-weight: 600; }
+.channel-stats .dot { font-size: 4px; }
+.channel-descline { display: flex; gap: 6px; max-width: 640px; text-align: left; background: none; border: 0; padding: 0; color: var(--fg-dim); font-size: 14px; cursor: pointer; }
+.channel-descline .cd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.channel-descline b { color: var(--fg); font-weight: 600; flex: none; }
+.channel-linkline { margin-top: 6px; font-size: 14px; color: var(--fg-dim); }
+.channel-linkline a { color: #3ea6ff; font-weight: 500; }
+html[data-theme="light"] .channel-linkline a { color: #065fd4; }
+.channel-linkline .link-more { background: none; border: 0; padding: 0; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
+.channel-actions .btn { border-radius: 18px; height: 36px; padding: 0 16px; font-weight: 600; display: inline-flex; align-items: center; background: var(--bg-chip); border: 0; }
+.channel-actions .btn:hover { background: var(--bg-hover); }
+.channel-tabs { gap: 0; align-items: center; }
+.channel-tab { padding: 14px 20px; }
+.chan-search { margin-left: 8px; display: flex; align-items: center; border: 1px solid transparent; border-radius: 20px; }
+.chan-search input { width: 0; opacity: 0; border: 0; background: none; color: var(--fg); outline: 0; font: inherit; padding: 0; transition: width .2s; }
+.chan-search.open { border-color: var(--line); padding-right: 12px; }
+.chan-search.open input { width: 200px; opacity: 1; }
+.ch-sec { margin-bottom: 32px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.ch-sec:last-child { border-bottom: 0; }
+.ch-sec-head { display: flex; align-items: baseline; justify-content: space-between; }
+.ch-sec-title { font-size: 18px; font-weight: 600; margin: 0 0 14px; }
+.ch-sec-more { font-size: 14px; font-weight: 600; color: var(--fg-dim); margin-bottom: 14px; }
+.ch-sec-more:hover { color: var(--fg); }
+.car { position: relative; }
+.car-track { display: flex; gap: 16px; overflow-x: auto; scroll-behavior: smooth; scrollbar-width: none; padding-bottom: 12px; }
+.car-track::-webkit-scrollbar { display: none; }
+.car-track .video-card { flex: 0 0 clamp(200px, 22vw, 300px); }
+.car-btn { position: absolute; top: 28%; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font-size: 26px; line-height: 1; display: grid; place-items: center; box-shadow: var(--shadow); z-index: 2; cursor: pointer; }
+.car-btn.prev { left: -14px; } .car-btn.next { right: -14px; }
+.car-btn:hover { background: var(--bg-hover); }
+.chan-cards .card-avatar, .chan-cards .card-channel { display: none; }
+.ch-sort { margin-bottom: 16px; }
+.about-links { display: flex; flex-direction: column; gap: 10px; }
+.about-links a { display: flex; flex-direction: column; font-size: 14px; }
+.about-links a span { color: #3ea6ff; font-size: 13px; }
+.about-modal { padding: 4px 24px 24px; max-height: 70vh; overflow: auto; }
+.about-modal h3 { font-size: 18px; margin: 20px 0 10px; }
+.about-modal .am-desc { white-space: pre-line; color: var(--fg-dim); line-height: 1.5; margin: 0; }
+.am-row { display: flex; gap: 16px; align-items: flex-start; padding: 8px 0; font-size: 14px; }
+.am-row .ic { width: 24px; height: 24px; flex: none; margin-top: 2px; }
+.am-row b { display: block; font-weight: 600; }
+.am-row span { color: #3ea6ff; font-size: 13px; word-break: break-all; }
+.about-modal .btn { margin-top: 20px; display: inline-flex; gap: 8px; align-items: center; }
+/* оформление канала в окне настроек */
+.cs-img { display: flex; gap: 16px; align-items: center; margin-bottom: 14px; }
+.cs-img .cs-prev { background: var(--bg-chip); border-radius: 8px; overflow: hidden; flex: none; display: grid; place-items: center; color: #fff; font-weight: 700; }
+.cs-img .cs-prev img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cs-img .cs-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.cs-link { display: grid; grid-template-columns: 1fr 1.6fr; gap: 8px; margin-bottom: 8px; }
+@media (max-width: 720px) {
+  .channel-head { flex-direction: column; gap: 12px; } .channel-head .ch-avatar { width: 80px; height: 80px; font-size: 28px; }
+  .channel-info h1 { font-size: 24px; } .chan-search.open input { width: 120px; } .car-btn { display: none; }
+}
+.chan-cards .card-body { display: block; padding-left: 0; }
+.chan-cards .card-text { width: 100%; }
+@media (max-width: 720px) { .channel-info { flex: 0 0 auto; } }
