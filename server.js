@@ -108,7 +108,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/config', (req, res) => {
-  res.json({ googleClientId: auth.GOOGLE_CLIENT_ID, maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024) });
+  res.json({ googleClientId: auth.GOOGLE_CLIENT_ID, maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024), contactEmail: process.env.CONTACT_EMAIL || '' });
 });
 
 app.get('/api/bootstrap', wrap(async (req, res) => {

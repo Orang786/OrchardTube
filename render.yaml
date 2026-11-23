@@ -20,5 +20,7 @@ services:
         generateValue: true
       - key: OWNER_EMAILS       # ваш Gmail (владелец сайта) — задать в панели Render
         sync: false
+      - key: CONTACT_EMAIL      # почта для страницы «Связаться» (необязательно)
+        sync: false
       - key: MAX_UPLOAD_MB
         value: 100

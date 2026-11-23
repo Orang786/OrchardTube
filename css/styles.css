@@ -1646,3 +1646,24 @@ html[data-theme="light"] .channel-linkline a { color: #065fd4; }
 .chan-cards .card-body { display: block; padding-left: 0; }
 .chan-cards .card-text { width: 100%; }
 @media (max-width: 720px) { .channel-info { flex: 0 0 auto; } }
+
+/* кнопки сортировки: текст по центру */
+.chip { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+/* страница канала: видео идут слева направо */
+.video-grid.chan-cards { grid-template-columns: repeat(auto-fill, minmax(260px, 300px)); justify-content: start; }
+@media (max-width: 720px) { .video-grid.chan-cards { grid-template-columns: 1fr; } }
+/* удаление своего видео на карточке */
+.thumb-del:hover { background: #d93025; }
+@media (hover: none) { .thumb-actions { opacity: 1; } }
+/* ссылки под «Справка» */
+.side-legal { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 10px 12px 0; font-size: 12px; font-weight: 500; color: var(--fg-dim); line-height: 1.6; }
+.side-legal a:hover { color: var(--fg); text-decoration: underline; }
+.side-legal ~ .side-footer { padding-top: 10px; }
+body.mini .side-legal { display: none; }
+.legal { max-width: 760px; margin: 0 auto; padding: 8px 0 40px; line-height: 1.65; }
+.legal h1 { font-size: 30px; margin: 0 0 16px; }
+.legal h2 { font-size: 18px; margin: 24px 0 6px; }
+.legal p, .legal li { color: var(--fg-dim); font-size: 15px; }
+.legal a { color: #3ea6ff; }
+.legal-nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line); }
+.ch-sort .chips { justify-content: flex-start; }

@@ -40,7 +40,7 @@
   const CHANNELS = {};
   const commentsCache = {};
   let me = null; // { user, channel, likes, subs } или null, если не вошли
-  const api = { online: false, googleClientId: '', maxMb: 0 };
+  const api = { online: false, googleClientId: '', maxMb: 0, contact: '' };
 
   function saveState() {
     try {
@@ -116,6 +116,7 @@
       api.online = true;
       api.googleClientId = cfg.data.googleClientId || '';
       api.maxMb = cfg.data.maxUploadMb || 0;
+      api.contact = cfg.data.contactEmail || '';
       VIDEOS.splice(0, VIDEOS.length, ...boot.data.VIDEOS);
       Object.keys(CHANNELS).forEach((k) => delete CHANNELS[k]);
       Object.assign(CHANNELS, boot.data.CHANNELS);
@@ -159,6 +160,7 @@
         ${progressBar(v)}
         <div class="thumb-actions">
           <button class="thumb-act" data-act="later" data-id="${v.id}" title="Смотреть позже" aria-label="Смотреть позже"><svg class="ic"><use href="#i-clock"/></svg></button>
+          ${me && me.channel && v.channel === me.channel.id ? `<button class="thumb-act thumb-del" data-act="delete" data-id="${v.id}" title="Удалить видео" aria-label="Удалить видео"><svg class="ic"><use href="#i-trash"/></svg></button>` : ''}
         </div>
       </a>
       <div class="card-body">
@@ -239,6 +241,20 @@
   });
   window.addEventListener('resize', closePopover);
 
+  // Удаление своего видео (со страницы канала, из «Ваших видео», из меню карточки)
+  async function deleteVideo(id) {
+    const v = byId(id);
+    if (!v || !confirm(`Удалить видео «${v.title}»? Это действие нельзя отменить.`)) return;
+    const r = await apiFetch(`/api/videos/${encodeURIComponent(id)}`, { method: 'DELETE' }, 15000).catch(() => null);
+    if (!r || !r.ok) { toast((r && r.data && r.data.message) || 'Не удалось удалить видео'); return; }
+    const i = VIDEOS.findIndex((x) => x.id === id);
+    if (i >= 0) VIDEOS.splice(i, 1);
+    delete EXTRA[id];
+    if (me && me.channel && CHANNELS[me.channel.id]) CHANNELS[me.channel.id].videoCount = Math.max(0, (CHANNELS[me.channel.id].videoCount || 1) - 1);
+    toast('Видео удалено');
+    if (parseRoute().parts[0] === 'watch') location.hash = me && me.channel ? '#/channel/' + me.channel.id : '#/'; else render();
+  }
+
   function openVideoMenu(anchor, id) {
     const v = byId(id);
     if (!v) return;
@@ -247,6 +263,7 @@
       <button class="pop-item" data-act="share"><svg class="ic"><use href="#i-link"/></svg>Поделиться</button>
       <div class="pop-sep"></div>
       <button class="pop-item" data-act="hide"><svg class="ic"><use href="#i-close"/></svg>Не интересует</button>
+      ${me && me.channel && v.channel === me.channel.id ? `<div class="pop-sep"></div><button class="pop-item" data-act="delete" style="color:#ff5a4d"><svg class="ic"><use href="#i-trash"/></svg>Удалить видео</button>` : ''}
     `);
     $$('#popover .pop-item').forEach((b) => b.addEventListener('click', () => {
       const act = b.dataset.act;
@@ -255,6 +272,8 @@
         toggleLater(id);
       } else if (act === 'share') {
         copyLink(id);
+      } else if (act === 'delete') {
+        deleteVideo(id);
       } else if (act === 'hide') {
         state.hidden.add(id);
         const card = $(`[data-card="${id}"]`);
@@ -503,6 +522,44 @@
   }
 
   function linkHost(u) { try { return new URL(u).host.replace(/^www\./, '') + (new URL(u).pathname.length > 1 ? new URL(u).pathname : ''); } catch (e) { return u; } }
+
+  /* ---------------- правовые страницы ---------------- */
+  const LEGAL = {
+    about: ['О сервисе', () => `<p>OrchardTube — видеоплатформа, на которой любой человек может войти через аккаунт Google, создать канал, загружать видео, комментировать и подписываться на других авторов.</p>
+      <p>Для авторов есть Студия (<a href="/studio">/studio</a>): управление видео, аналитика и комментарии.</p>`],
+    privacy: ['Политика конфиденциальности', () => `<h2>Какие данные мы получаем</h2>
+      <p>При входе через Google мы получаем имя, адрес электронной почты и фото профиля вашего аккаунта. Пароль от Google нам не передаётся.</p>
+      <h2>Зачем они нужны</h2>
+      <p>Имя и почта нужны, чтобы создать ваш аккаунт и канал, а также чтобы определить ваши права (например, роль модератора). Адрес почты другим пользователям не показывается.</p>
+      <h2>Что видят другие</h2>
+      <p>Публично отображаются название и адрес канала, загруженные вами видео, комментарии и число подписчиков. Ваши лайки и подписки видите только вы.</p>
+      <h2>Файлы cookie и хранилище браузера</h2>
+      <p>Мы используем один служебный файл cookie для входа (сессия) и локальное хранилище браузера для темы, истории просмотров и списка «Смотреть позже». Рекламных и отслеживающих cookie нет.</p>
+      <h2>Просмотры</h2>
+      <p>Чтобы не накручивать просмотры, сервер кратковременно учитывает IP-адрес в памяти. В базе IP-адреса не хранятся.</p>
+      <h2>Удаление данных</h2>
+      <p>Вы можете удалить свои видео и комментарии в любой момент. Чтобы удалить аккаунт и канал целиком, свяжитесь с владельцем сайта (раздел «Связаться»).</p>`],
+    copyright: ['Авторские права', () => `<h2>Ваш контент</h2>
+      <p>Загружая видео, вы подтверждаете, что у вас есть права на это видео, музыку и другие материалы в нём. Права на контент остаются у автора.</p>
+      <h2>Чужие материалы</h2>
+      <p>Нельзя загружать материалы, на которые у вас нет прав: фильмы, чужие видео, музыку и т.п. без разрешения правообладателя.</p>
+      <h2>Как сообщить о нарушении</h2>
+      <p>Если вы правообладатель и нашли своё произведение на сайте, напишите владельцу (раздел «Связаться») и укажите: ссылку на видео, ссылку на оригинал или подтверждение прав, ваши контактные данные. Нарушающее видео будет удалено модераторами, а при повторных нарушениях канал может быть заблокирован.</p>`],
+    terms: ['Условия использования', () => `<p>Используя OrchardTube, вы соглашаетесь с этими правилами.</p>
+      <h2>Нельзя</h2>
+      <ul><li>загружать материалы, нарушающие закон или чужие права;</li><li>публиковать спам, оскорбления, угрозы и травлю;</li><li>загружать вредоносные файлы и обманывать пользователей;</li><li>накручивать просмотры, лайки и подписчиков;</li><li>выдавать себя за другого человека или канал.</li></ul>
+      <h2>Модерация</h2>
+      <p>Модераторы и администраторы могут удалять видео и комментарии, нарушающие правила, и блокировать пользователей. Заблокированный пользователь не может загружать видео, комментировать и ставить оценки, а его видео скрываются.</p>
+      <h2>Ответственность</h2>
+      <p>Автор отвечает за загруженный им контент. Сервис предоставляется «как есть», без гарантий бесперебойной работы.</p>`],
+    contact: ['Связаться', () => `<p>По вопросам работы сайта, удаления аккаунта и нарушений авторских прав напишите владельцу сайта.</p>
+      ${api.contact ? `<p><a href="mailto:${esc(api.contact)}">${esc(api.contact)}</a></p>` : '<p>Контактный адрес пока не указан владельцем сайта.</p>'}`]
+  };
+
+  function pageLegal(kind) {
+    const e = LEGAL[kind] || LEGAL.about;
+    return `<div class="legal"><h1>${esc(e[0])}</h1>${e[1]()}<p class="legal-nav">${Object.keys(LEGAL).map((k) => `<a href="#/legal/${k}">${esc(LEGAL[k][0])}</a>`).join('')}</p></div>`;
+  }
 
   function pageChannel(chId, tab) {
     const ch = CHANNELS[chId];
@@ -896,7 +953,7 @@
       b.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        toggleLater(b.dataset.id);
+        if (b.dataset.act === 'delete') deleteVideo(b.dataset.id); else toggleLater(b.dataset.id);
       });
     });
   }
@@ -1173,20 +1230,7 @@
 
     const upload2 = $('#uploadBtn2');
     if (upload2) upload2.addEventListener('click', openUpload);
-    $$('[data-del]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const id = btn.dataset.del;
-        const v = byId(id);
-        if (!v || !confirm(`Удалить видео «${v.title}»? Это действие нельзя отменить.`)) return;
-        const r = await apiFetch(`/api/videos/${encodeURIComponent(id)}`, { method: 'DELETE' }, 15000).catch(() => null);
-        if (!r || !r.ok) { toast((r && r.data && r.data.message) || 'Не удалось удалить видео'); return; }
-        const i = VIDEOS.findIndex((x) => x.id === id);
-        if (i >= 0) VIDEOS.splice(i, 1);
-        if (me && me.channel && CHANNELS[me.channel.id]) CHANNELS[me.channel.id].videoCount = Math.max(0, (CHANNELS[me.channel.id].videoCount || 1) - 1);
-        toast('Видео удалено');
-        render();
-      });
-    });
+    $$('[data-del]').forEach((btn) => btn.addEventListener('click', () => deleteVideo(btn.dataset.del)));
   }
 
   /* ---------------- рендер ---------------- */
@@ -1214,6 +1258,7 @@
 
     switch (page) {
       case 'watch': html = pageWatch(parts[1]); break;
+      case 'legal': html = pageLegal(parts[1]); break;
       case 'subs': html = pageSubs(); break;
       case 'history': html = pageHistory(); break;
       case 'liked': html = pageLiked(); break;
