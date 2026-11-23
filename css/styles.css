@@ -998,7 +998,7 @@ html[data-theme="light"] .chip:hover { background: #e5e5e5; }
   transition: border-color .15s ease;
 }
 .comment-input:focus { border-bottom-color: var(--fg); }
-.comment-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.comment-form-actions { display: flex; justify-content: flex-start; gap: 8px; margin-top: 8px; }
 
 .btn {
   height: 36px;

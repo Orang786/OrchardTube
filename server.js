@@ -57,6 +57,50 @@ const limited = (name, max, windowMs, by = 'sub') => (req, res, next) => {
   res.status(429).json({ error: 'rate', message: 'Слишком часто, попробуйте позже' });
 };
 
+// Текущий пользователь (если вошёл). Заблокированным запрещены любые изменения.
+app.use('/api', wrap(async (req, res, next) => {
+  req.user = null;
+  if (req.sub) {
+    req.user = await store.getUser(req.sub);
+    if (!req.user) { auth.clearSession(req, res); req.sub = null; }
+  }
+  if (req.user && req.user.banned && !/^(GET|HEAD|OPTIONS)$/.test(req.method) && req.path !== '/auth/logout') {
+    return res.status(403).json({ error: 'banned', message: 'Аккаунт заблокирован' + (req.user.banned.reason ? ': ' + req.user.banned.reason : '') });
+  }
+  next();
+}));
+
+const requireRole = (min) => (req, res, next) => {
+  if (!req.user) return res.status(401).json({ error: 'auth', message: 'Войдите в аккаунт Google' });
+  if (store.rankOf(req.user) < store.RANK[min]) return res.status(403).json({ error: 'forbidden', message: 'Недостаточно прав' });
+  next();
+};
+
+// Забирает один файл из multipart (для обложки) и кладёт в GridFS
+function receiveImage(req, field, limit) {
+  return new Promise((resolve, reject) => {
+    let bb;
+    try { bb = Busboy({ headers: req.headers, limits: { files: 1, fields: 5, fileSize: limit } }); }
+    catch (e) { return reject(new store.HttpError(400, 'Ожидается multipart/form-data')); }
+    let p = null, tooBig = false;
+    bb.on('file', (name, file, info) => {
+      if (name !== field || !/^image\/(jpeg|png|webp)$/.test(info.mimeType)) { file.resume(); return; }
+      file.on('limit', () => { tooBig = true; });
+      p = store.saveMedia(file, info.filename || field, info.mimeType);
+    });
+    bb.on('error', () => reject(new store.HttpError(400, 'Ошибка разбора формы')));
+    bb.on('close', async () => {
+      try {
+        if (!p) return reject(new store.HttpError(400, 'Нужна картинка JPG, PNG или WebP'));
+        const id = await p;
+        if (tooBig) { await store.deleteMedia(id); return reject(new store.HttpError(413, 'Файл слишком большой (до 2 МБ)')); }
+        resolve(id);
+      } catch (e) { reject(e); }
+    });
+    req.pipe(bb);
+  });
+}
+
 /* ---------- служебное ---------- */
 
 app.get('/api/health', (req, res) => {
@@ -168,6 +212,7 @@ app.post('/api/videos', auth.requireAuth, limited('upload', 10, 3600e3), wrap(as
         desc: String(fields.desc || '').slice(0, 5000),
         category: CATEGORIES.includes(fields.category) ? fields.category : 'Все',
         duration: DURATION_RE.test(fields.duration || '') ? fields.duration : '0:00',
+        visibility: fields.visibility,
         mediaId: saved.video,
         thumbId: saved.thumb || ''
       });
@@ -181,6 +226,24 @@ app.post('/api/videos', auth.requireAuth, limited('upload', 10, 3600e3), wrap(as
   });
 
   req.pipe(bb);
+}));
+
+app.get('/api/videos/:id', wrap(async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const r = await store.getVideoFor(String(req.params.id), req.user);
+  if (!r) return res.status(404).json({ error: 'not-found', message: 'Видео не найдено' });
+  res.json(r);
+}));
+
+app.patch('/api/videos/:id', auth.requireAuth, wrap(async (req, res) => {
+  const { title, desc, category, visibility } = req.body || {};
+  if (category !== undefined && !CATEGORIES.includes(category) && category !== 'Все') return res.status(400).json({ error: 'bad-request', message: 'Недопустимая категория' });
+  res.json({ video: await store.updateVideo(String(req.params.id), req.sub, { title, desc, category, visibility }) });
+}));
+
+app.post('/api/videos/:id/thumbnail', auth.requireAuth, limited('thumb', 30, 3600e3), wrap(async (req, res) => {
+  const id = await receiveImage(req, 'thumb', MAX_THUMB_BYTES);
+  res.json({ video: await store.setThumbnail(String(req.params.id), req.sub, id) });
 }));
 
 app.delete('/api/videos/:id', auth.requireAuth, wrap(async (req, res) => {
@@ -221,9 +284,12 @@ app.post('/api/channels/:id/subscribe', auth.requireAuth, limited('sub', 60, 600
 app.get('/api/media/:id', wrap(async (req, res) => {
   const f = await store.statMedia(req.params.id);
   if (!f) return res.status(404).end();
+  const owner = await store.videoOfMedia(String(req.params.id));
+  const isPrivate = owner && owner.visibility === 'private';
+  if (isPrivate && !(req.user && (req.user._id === owner.ownerSub || store.rankOf(req.user) >= store.RANK.moderator))) return res.status(404).end();
   res.setHeader('Content-Type', f.contentType);
   res.setHeader('Accept-Ranges', 'bytes');
-  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.setHeader('Cache-Control', isPrivate ? 'private, no-store' : 'public, max-age=86400');
 
   const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
   if (!m || (m[1] === '' && m[2] === '')) {
@@ -243,6 +309,38 @@ app.get('/api/media/:id', wrap(async (req, res) => {
   store.readMedia(f.oid, { start, end }).on('error', () => res.destroy()).pipe(res);
 }));
 
+/* ---------- Студия автора ---------- */
+
+const needChannel = wrap(async (req, res, next) => {
+  if (!req.user.channelId) return res.status(403).json({ error: 'no-channel', message: 'Сначала создайте канал' });
+  next();
+});
+const studio = [auth.requireAuth, needChannel];
+
+app.get('/api/studio/overview', ...studio, wrap(async (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json(await store.studioOverview(req.sub)); }));
+app.get('/api/studio/videos', ...studio, wrap(async (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json({ videos: await store.studioVideos(req.sub), categories: CATEGORIES }); }));
+app.get('/api/studio/comments', ...studio, wrap(async (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json({ comments: await store.studioComments(req.sub) }); }));
+app.get('/api/studio/analytics', ...studio, wrap(async (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json(await store.studioAnalytics(req.sub, Number(req.query.days))); }));
+
+/* ---------- Админ-панель ---------- */
+
+const staff = [requireRole('moderator')];
+const admins = [requireRole('admin')];
+const noStore = (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); };
+app.use('/api/admin', noStore);
+
+app.get('/api/admin/overview', ...staff, wrap(async (req, res) => res.json({ ...(await store.adminOverview()), me: { role: store.roleOf(req.user), name: req.user.name } })));
+app.get('/api/admin/users', ...staff, wrap(async (req, res) => res.json({ users: await store.adminUsers(String(req.query.q || '').slice(0, 80), String(req.query.role || '')), invites: await store.adminInvites() })));
+app.post('/api/admin/users/:sub/role', ...admins, wrap(async (req, res) => res.json({ user: await store.adminSetRole(req.user, String(req.params.sub), String(req.body && req.body.role)) })));
+app.post('/api/admin/grant', ...admins, wrap(async (req, res) => res.json(await store.adminGrantByEmail(req.user, req.body && req.body.email, String(req.body && req.body.role)))));
+app.delete('/api/admin/invites/:email', ...admins, wrap(async (req, res) => { await store.adminCancelInvite(req.user, String(req.params.email)); res.json({ ok: true }); }));
+app.post('/api/admin/users/:sub/ban', ...staff, wrap(async (req, res) => { await store.adminBan(req.user, String(req.params.sub), !!(req.body && req.body.banned), req.body && req.body.reason); res.json({ ok: true }); }));
+app.get('/api/admin/videos', ...staff, wrap(async (req, res) => res.json({ videos: await store.adminVideos(String(req.query.q || '').slice(0, 80)) })));
+app.delete('/api/admin/videos/:id', ...staff, wrap(async (req, res) => { await store.adminModerateDeleteVideo(req.user, String(req.params.id)); res.json({ ok: true }); }));
+app.get('/api/admin/comments', ...staff, wrap(async (req, res) => res.json({ comments: await store.adminComments() })));
+app.delete('/api/admin/comments/:id', ...staff, wrap(async (req, res) => { await store.adminModerateDeleteComment(req.user, String(req.params.id)); res.json({ ok: true }); }));
+app.get('/api/admin/audit', ...staff, wrap(async (req, res) => res.json({ log: await store.adminAudit() })));
+
 app.use('/api', (req, res) => res.status(404).json({ error: 'not-found' }));
 
 /* ---------- статика фронтенда ---------- */
@@ -256,6 +354,8 @@ const noCache = {
 app.use('/css', express.static(path.join(__dirname, 'css'), noCache));
 app.use('/js', express.static(path.join(__dirname, 'js'), noCache));
 app.get(['/', '/index.html'], (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get(['/studio', '/studio/'], (req, res) => res.sendFile(path.join(__dirname, 'studio.html')));
+app.get(['/admin', '/admin/'], (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 
 /* ---------- ошибки ---------- */
 

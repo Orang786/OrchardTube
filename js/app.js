@@ -71,7 +71,10 @@
     toast._t = setTimeout(() => toastEl.classList.remove('show'), 2400);
   }
 
-  function byId(id) { return VIDEOS.find((v) => v.id === id); }
+  // Видео «по ссылке» и ограниченные не попадают в ленту — подгружаем их отдельно при открытии страницы
+  const EXTRA = {};
+  const triedVideo = {};
+  function byId(id) { return VIDEOS.find((v) => v.id === id) || EXTRA[id]; }
 
   /* ---------------- серверный API ---------------- */
   async function apiFetch(url, opts = {}, timeout = 15000) {
@@ -98,6 +101,7 @@
     state.likes = new Set(me ? me.likes : []);
     state.subs = new Set(me ? me.subs : []);
     if (me && me.channel) CHANNELS[me.channel.id] = me.channel;
+    if (me && me.banned && !applyMe.warned) { applyMe.warned = true; setTimeout(() => toast('Аккаунт заблокирован' + (me.banned.reason ? ': ' + me.banned.reason : '') + '. Загрузка, комментарии и оценки отключены.'), 800); }
   }
 
   // Бесплатный сервер на Render просыпается до минуты — ждём, но честно показываем это в интерфейсе
@@ -1123,6 +1127,18 @@
     const page = parts[0] || 'home';
     let html = '';
 
+    if (page === 'watch' && parts[1] && !byId(parts[1]) && api.online && !triedVideo[parts[1]]) {
+      triedVideo[parts[1]] = true;
+      main.innerHTML = '<p class="muted-note" style="padding:48px 24px;text-align:center">Загружаем видео…</p>';
+      apiFetch('/api/videos/' + encodeURIComponent(parts[1]), {}, 15000).then((r) => {
+        if (r && r.ok && r.data && r.data.video) {
+          EXTRA[r.data.video.id] = r.data.video;
+          if (r.data.channel) CHANNELS[r.data.channel.id] = r.data.channel;
+        }
+      }).catch(() => null).then(() => { if (location.hash.indexOf('#/watch/' + parts[1]) === 0) render(); });
+      return;
+    }
+
     switch (page) {
       case 'watch': html = pageWatch(parts[1]); break;
       case 'subs': html = pageSubs(); break;
@@ -1190,8 +1206,10 @@
         <div class="pop-sep"></div>
         ${me.channel
           ? `<a class="pop-item" href="#/channel/${esc(me.channel.id)}"><svg class="ic"><use href="#i-user"/></svg>Ваш канал</a>
+             <a class="pop-item" href="/studio"><svg class="ic"><use href="#i-settings"/></svg>Студия OrchardTube</a>
              <button class="pop-item" id="popEditCh"><svg class="ic"><use href="#i-settings"/></svg>Настроить канал</button>`
           : `<button class="pop-item" id="popCreateCh"><svg class="ic"><use href="#i-plus"/></svg>Создать канал</button>`}
+        ${['moderator', 'admin', 'owner'].includes(me.role) ? `<a class="pop-item" href="/admin"><svg class="ic"><use href="#i-settings"/></svg>Админ-панель</a>` : ''}
         <button class="pop-item" id="popTheme"><svg class="ic"><use href="#i-moon"/></svg>Сменить тему</button>
         <div class="pop-sep"></div>
         <button class="pop-item" id="popLogout"><svg class="ic"><use href="#i-close"/></svg>Выйти</button>

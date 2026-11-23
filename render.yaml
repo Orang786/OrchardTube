@@ -18,5 +18,7 @@ services:
         sync: false
       - key: SESSION_SECRET     # ключ подписи сессий (сгенерируется автоматически)
         generateValue: true
+      - key: OWNER_EMAILS       # ваш Gmail (владелец сайта) — задать в панели Render
+        sync: false
       - key: MAX_UPLOAD_MB
         value: 100
