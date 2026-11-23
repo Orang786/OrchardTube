@@ -134,6 +134,9 @@ app.post('/api/auth/google', limited('login', 20, 600e3, 'ip'), wrap(async (req,
   res.json(await store.getMe(profile.sub));
 }));
 
+// Если адрес открыли вручную (GET) — просто ведём на главную
+app.get('/api/auth/google/redirect', (req, res) => res.redirect(302, '/'));
+
 // Вход через Google в режиме redirect (телефоны): Google делает POST формы сюда
 app.post('/api/auth/google/redirect', limited('login', 20, 600e3, 'ip'), express.urlencoded({ extended: false, limit: '20kb' }), wrap(async (req, res) => {
   const cookie = /(?:^|;\s*)g_csrf_token=([^;]+)/.exec(req.headers.cookie || '');
