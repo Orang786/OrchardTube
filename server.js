@@ -368,6 +368,16 @@ const noCache = {
 app.use('/css', express.static(path.join(__dirname, 'css'), noCache));
 app.use('/js', express.static(path.join(__dirname, 'js'), noCache));
 app.get(['/', '/index.html'], (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+// Встраиваемый плеер для <iframe> (HTML-код из меню плеера): открытые видео и видео по ссылке
+const escHtml = (x) => String(x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+app.get('/embed/:id', wrap(async (req, res) => {
+  const r = await store.getVideoFor(String(req.params.id), null);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; media-src 'self'; img-src 'self'; style-src 'unsafe-inline'");
+  if (!r || r.video.visibility === 'private') return res.status(404).send('<!doctype html><meta charset="utf-8"><body style="margin:0;background:#000;color:#aaa;font:14px sans-serif;display:grid;place-items:center;height:100vh">Видео недоступно</body>');
+  const v = r.video;
+  res.send(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escHtml(v.title)}</title><style>html,body{margin:0;height:100%;background:#000}video{width:100%;height:100%;display:block;object-fit:contain}</style></head><body><video src="${escHtml(v.media)}" ${v.thumb ? `poster="${escHtml(v.thumb)}"` : ''} controls preload="metadata" playsinline></video></body></html>`);
+}));
 app.get(['/studio', '/studio/'], (req, res) => res.sendFile(path.join(__dirname, 'studio.html')));
 app.get(['/admin', '/admin/'], (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 

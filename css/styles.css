@@ -1667,3 +1667,48 @@ body.mini .side-legal { display: none; }
 .legal a { color: #3ea6ff; }
 .legal-nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line); }
 .ch-sort .chips { justify-content: flex-start; }
+
+/* ---------- Плеер: «таблетки», меню по ПКМ, мини-проигрыватель ---------- */
+.pc-row { gap: 8px; height: 56px; }
+.pc-pill { display: flex; align-items: center; height: 44px; border-radius: 22px; background: rgba(40,40,40,.62); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); color: #fff; border: 0; font: inherit; }
+.pc-pill .pc-btn { width: 44px; height: 44px; position: relative; }
+.pc-pill .pc-btn:hover { background: rgba(255,255,255,.16); }
+.pc-pill > .pc-btn:first-child { border-radius: 22px 0 0 22px; }
+.pc-pill > .pc-btn:last-child { border-radius: 0 22px 22px 0; }
+.pc-pill > .pc-btn:only-child { border-radius: 22px; }
+.pc-timepill { padding: 0 16px; }
+.pc-timepill .pc-time { padding: 0; font-size: 13px; opacity: 1; }
+.pc-about { padding: 0 14px 0 16px; gap: 4px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.pc-about .ic { width: 16px; height: 16px; }
+.pc-about:hover { background: rgba(70,70,70,.7); }
+.pc-vol { overflow: hidden; }
+.pc-vol-range { -webkit-appearance: none; appearance: none; width: 0; opacity: 0; height: 3px; margin: 0; border-radius: 3px; cursor: pointer; transition: width .2s, margin .2s, opacity .2s; background: linear-gradient(to right, #fff var(--v, 100%), rgba(255,255,255,.3) var(--v, 100%)); }
+.pc-vol:hover .pc-vol-range, .pc-vol:focus-within .pc-vol-range { width: 64px; margin: 0 14px 0 2px; opacity: 1; }
+.pc-vol-range::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; }
+.pc-vol-range::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: #fff; }
+/* подсказка над кнопкой: «Отключение звука  M» */
+.pc-btn[data-tip]:hover::after { content: attr(data-tip) "  " attr(data-key); position: absolute; left: 0; bottom: 54px; white-space: nowrap; background: rgba(20,20,20,.92); color: #fff; font-size: 13px; font-weight: 500; padding: 6px 10px; border-radius: 8px; pointer-events: none; z-index: 6; }
+.pc-btn[data-tip]:not([data-key]):hover::after { content: attr(data-tip); }
+.pc-pill:last-child .pc-btn[data-tip]:hover::after { left: auto; right: 0; }
+.pc-track i, .pc-track b { background: #f03; }
+.pc-track b { box-shadow: none; width: 13px; height: 13px; }
+.pc-bar:hover .pc-track { height: 5px; }
+/* мини-проигрыватель: заглушка в основном окне */
+.player-pip-note { position: absolute; inset: 0; z-index: 5; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #4b4b4b; color: #ccc; font-size: 18px; cursor: pointer; }
+.player-pip-note .ic { width: 96px; height: 96px; stroke-width: 1.2; color: #777; }
+.player.is-pip .player-pip-note { display: flex; }
+.player.is-pip .player-controls, .player.is-pip .player-center { display: none; }
+/* меню по правой кнопке */
+.ctx-menu { position: fixed; z-index: 300; min-width: 340px; padding: 8px 0; border-radius: 12px; background: rgba(28,28,28,.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); box-shadow: 0 8px 32px rgba(0,0,0,.6); color: #fff; }
+.ctx-menu button { display: flex; align-items: center; gap: 16px; width: 100%; padding: 0 20px; height: 40px; background: none; border: 0; color: inherit; font: inherit; font-size: 14px; font-weight: 500; text-align: left; cursor: pointer; }
+.ctx-menu button:hover { background: rgba(255,255,255,.12); }
+.ctx-menu .ic { width: 22px; height: 22px; flex: none; }
+.ctx-menu .ctx-ok { margin-left: auto; width: 18px; height: 18px; }
+/* статистика для сисадминов */
+.player-stats { position: absolute; z-index: 6; top: 12px; left: 12px; width: min(340px, calc(100% - 24px)); padding: 10px 14px; border-radius: 8px; background: rgba(0,0,0,.78); color: #fff; font: 12px/1.6 ui-monospace, Menlo, Consolas, monospace; pointer-events: auto; }
+.player-stats div { display: flex; justify-content: space-between; gap: 12px; }
+.player-stats span { color: #bbb; }
+.player-stats b { font-weight: 500; text-align: right; word-break: break-all; }
+.ps-x { position: absolute; right: 6px; top: 2px; background: none; border: 0; color: #fff; font-size: 18px; cursor: pointer; }
+.fix-list { margin: 0 0 16px; padding-left: 20px; line-height: 1.7; font-size: 14px; color: var(--fg-dim); }
+@media (max-width: 720px) { .pc-about { display: none; } .pc-row { gap: 4px; } .pc-pill .pc-btn { width: 38px; height: 38px; } .pc-pill { height: 38px; } .ctx-menu { min-width: 280px; } }

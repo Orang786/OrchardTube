@@ -255,6 +255,11 @@
     if (parseRoute().parts[0] === 'watch') location.hash = me && me.channel ? '#/channel/' + me.channel.id : '#/'; else render();
   }
 
+  function closeCtx() { const m = document.getElementById('ctxMenu'); if (m) m.remove(); }
+  document.addEventListener('mousedown', (e) => { if (!e.target.closest('#ctxMenu')) closeCtx(); });
+  window.addEventListener('scroll', closeCtx, true);
+  window.addEventListener('blur', closeCtx);
+
   function openVideoMenu(anchor, id) {
     const v = byId(id);
     if (!v) return;
@@ -335,6 +340,7 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      closeCtx();
       closePopover();
       if (!backdrop.hidden) closeModal();
       document.body.classList.remove('nav-open');
@@ -343,6 +349,7 @@
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
     if (typing) return;
 
+    if (window.__otPlayerKey && !e.ctrlKey && !e.metaKey && !e.altKey && window.__otPlayerKey(e)) { e.preventDefault(); return; }
     if (e.key === '/') { e.preventDefault(); $('#searchInput').focus(); }
     if (e.key === '?') { e.preventDefault(); openHelp(); }
     if (e.key.toLowerCase() === 't') toggleTheme();
@@ -766,16 +773,23 @@
             <div class="player-center">
               <button class="big-play" id="bigPlay" aria-label="Смотреть"><svg class="ic"><use href="#i-play"/></svg></button>
             </div>
+            <div class="player-pip-note"><svg class="ic"><use href="#i-pip"/></svg><div>Видео вынесено в отдельное окно</div></div>
+            <div class="player-stats" id="pStats" hidden></div>
             <div class="player-controls">
               <div class="pc-bar" id="pcBar">
                 <div class="pc-track"><i id="pcFill"></i><b id="pcKnob"></b></div>
               </div>
               <div class="pc-row">
-                <button class="pc-btn" id="pcPlay" aria-label="Пауза"><svg class="ic"><use href="#i-play"/></svg></button>
-                <button class="pc-btn" id="pcMute" aria-label="Звук"><svg class="ic"><use href="#i-volume"/></svg></button>
-                <span class="pc-time" id="pcTime">0:00 / ${esc(v.duration)}</span>
+                <div class="pc-pill"><button class="pc-btn" id="pcPlay" data-tip="Смотреть" data-key="K" aria-label="Смотреть"><svg class="ic"><use href="#i-play"/></svg></button></div>
+                <div class="pc-pill pc-vol"><button class="pc-btn" id="pcMute" data-tip="Отключение звука" data-key="M" aria-label="Звук"><svg class="ic"><use href="#i-volume"/></svg></button><input class="pc-vol-range" id="pcVol" type="range" min="0" max="1" step="0.02" value="1" aria-label="Громкость"></div>
+                <div class="pc-pill pc-timepill"><span class="pc-time" id="pcTime">0:00 / ${esc(v.duration)}</span></div>
+                <button class="pc-pill pc-about" id="pcAbout" type="button">В этом видео <svg class="ic"><use href="#i-chevron-right"/></svg></button>
                 <span class="pc-spacer"></span>
-                <button class="pc-btn" id="pcFull" aria-label="Полный экран"><svg class="ic"><use href="#i-fullscreen"/></svg></button>
+                <div class="pc-pill">
+                  <button class="pc-btn" id="pcSpeed" data-tip="Скорость" aria-label="Скорость"><svg class="ic"><use href="#i-settings"/></svg></button>
+                  <button class="pc-btn" id="pcPip" data-tip="Мини-проигрыватель" data-key="I" aria-label="Мини-проигрыватель"><svg class="ic"><use href="#i-pip"/></svg></button>
+                  <button class="pc-btn" id="pcFull" data-tip="Во весь экран" data-key="F" aria-label="Полный экран"><svg class="ic"><use href="#i-fullscreen"/></svg></button>
+                </div>
               </div>
             </div>
           </div>
@@ -843,6 +857,8 @@
   let activeVideo = null;
 
   function stopPlayer() {
+    window.__otPlayerKey = null;
+    closeCtx();
     if (player && player.timer) clearInterval(player.timer);
     player = null;
     // убранный из DOM <video> может продолжать играть звук — останавливаем явно
@@ -913,11 +929,7 @@
       paint();
     });
 
-    $('#pcMute').addEventListener('click', (e) => {
-      vid.muted = !vid.muted;
-      e.currentTarget.classList.toggle('active', vid.muted);
-      toast(vid.muted ? 'Звук выключен' : 'Звук включён');
-    });
+    $('#pcMute').addEventListener('click', () => { vid.muted = !vid.muted; if (!vid.muted && vid.volume === 0) vid.volume = 0.5; });
 
     $('#pcFull').addEventListener('click', () => {
       try {
@@ -925,6 +937,153 @@
         else el.requestFullscreen && el.requestFullscreen();
       } catch (err) { toast('Полноэкранный режим недоступен'); }
     });
+
+    /* --- громкость, скорость, мини-проигрыватель, повтор --- */
+    const muteBtn = $('#pcMute'), volEl = $('#pcVol');
+    const syncVol = () => {
+      const off = vid.muted || vid.volume === 0;
+      muteBtn.querySelector('use').setAttribute('href', off ? '#i-volume-off' : '#i-volume');
+      muteBtn.dataset.tip = off ? 'Включение звука' : 'Отключение звука';
+      volEl.value = off ? 0 : vid.volume;
+      volEl.style.setProperty('--v', (off ? 0 : vid.volume) * 100 + '%');
+    };
+    $('#pcMute').addEventListener('click', syncVol);
+    vid.addEventListener('volumechange', syncVol);
+    volEl.addEventListener('input', () => { vid.muted = false; vid.volume = Number(volEl.value); syncVol(); });
+    syncVol();
+    const syncPlayTip = () => { const b = $('#pcPlay'); if (b) b.dataset.tip = vid.paused ? 'Смотреть' : 'Пауза'; };
+    vid.addEventListener('play', syncPlayTip); vid.addEventListener('pause', syncPlayTip);
+
+    const goPip = async () => {
+      try {
+        if (document.pictureInPictureElement) await document.exitPictureInPicture();
+        else if (document.pictureInPictureEnabled && !vid.disablePictureInPicture) await vid.requestPictureInPicture();
+        else toast('Мини-проигрыватель не поддерживается этим браузером');
+      } catch (err) { toast('Не удалось открыть мини-проигрыватель'); }
+    };
+    vid.addEventListener('enterpictureinpicture', () => el.classList.add('is-pip'));
+    vid.addEventListener('leavepictureinpicture', () => el.classList.remove('is-pip'));
+    $('#pcPip').addEventListener('click', goPip);
+    $('.player-pip-note', el).addEventListener('click', goPip);
+
+    $('#pcSpeed').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPopover(e.currentTarget, `<div class="pop-head-t" style="padding:8px 14px;font-weight:600;font-size:13px;color:var(--fg-dim)">Скорость воспроизведения</div>${[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => `<button class="pop-item" data-rate="${r}">${vid.playbackRate === r ? '<svg class="ic"><use href="#i-check"/></svg>' : '<span style="width:24px"></span>'}${r === 1 ? 'Обычная' : r + '×'}</button>`).join('')}`);
+      $$('#popover [data-rate]').forEach((b) => b.addEventListener('click', () => { vid.playbackRate = Number(b.dataset.rate); closePopover(); toast('Скорость: ' + (vid.playbackRate === 1 ? 'обычная' : vid.playbackRate + '×')); }));
+    });
+
+    $('#pcAbout').addEventListener('click', () => {
+      const d = $('#watchDesc');
+      if (!d) return;
+      d.classList.remove('collapsed');
+      d.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+
+    // старт с нужной секунды: #/watch/ID?t=42
+    const t0 = Number(parseRoute().params.get('t'));
+    if (t0 > 0) vid.addEventListener('loadedmetadata', () => { try { vid.currentTime = t0; } catch (e) { /* noop */ } }, { once: true });
+
+    /* --- меню по правой кнопке --- */
+    const watchUrl = (withTime) => location.origin + '/#/watch/' + v.id + (withTime ? '?t=' + Math.floor(vid.currentTime) : '');
+    const copyText = async (text, okMsg) => {
+      try { await navigator.clipboard.writeText(text); toast(okMsg); }
+      catch (e) {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); toast(okMsg); } catch (e2) { toast(text); }
+        ta.remove();
+      }
+    };
+    const debugInfo = () => {
+      const q = vid.getVideoPlaybackQuality ? vid.getVideoPlaybackQuality() : {};
+      const buf = vid.buffered.length ? vid.buffered.end(vid.buffered.length - 1) : 0;
+      return {
+        videoId: v.id, url: watchUrl(false), media: v.media,
+        currentTime: +vid.currentTime.toFixed(2), duration: total(), paused: vid.paused, ended: vid.ended, loop: vid.loop,
+        readyState: vid.readyState, networkState: vid.networkState, error: vid.error ? { code: vid.error.code, message: vid.error.message } : null,
+        resolution: vid.videoWidth + 'x' + vid.videoHeight, volume: +vid.volume.toFixed(2), muted: vid.muted, playbackRate: vid.playbackRate,
+        bufferedUntil: +buf.toFixed(2), droppedFrames: q.droppedVideoFrames || 0, totalFrames: q.totalVideoFrames || 0,
+        viewport: window.innerWidth + 'x' + window.innerHeight, userAgent: navigator.userAgent, time: new Date().toISOString()
+      };
+    };
+    let statsTimer = null;
+    const statsBox = $('#pStats');
+    const renderStats = () => {
+      const q = vid.getVideoPlaybackQuality ? vid.getVideoPlaybackQuality() : {};
+      const buf = vid.buffered.length ? Math.max(0, vid.buffered.end(vid.buffered.length - 1) - vid.currentTime) : 0;
+      const r = player && player.id === v.id ? el.getBoundingClientRect() : { width: 0, height: 0 };
+      const rows = [
+        ['ID видео', v.id], ['Окно / экран', Math.round(r.width) + 'x' + Math.round(r.height) + ' / ' + screen.width + 'x' + screen.height],
+        ['Разрешение', (vid.videoWidth || 0) + 'x' + (vid.videoHeight || 0)], ['Громкость', Math.round((vid.muted ? 0 : vid.volume) * 100) + '%'],
+        ['Скорость', vid.playbackRate + '×'], ['Пропущено кадров', (q.droppedVideoFrames || 0) + ' из ' + (q.totalVideoFrames || 0)],
+        ['Буфер', buf.toFixed(2) + ' с'], ['Состояние', ['нет данных', 'метаданные', 'текущий кадр', 'есть данные', 'можно играть'][vid.readyState] + (vid.paused ? ', пауза' : ', идёт')],
+        ['Сеть', ['пусто', 'ожидание', 'загрузка', 'нет источника'][vid.networkState]]
+      ];
+      statsBox.innerHTML = '<button class="ps-x" aria-label="Закрыть">×</button>' + rows.map(([k, val]) => `<div><span>${esc(k)}</span><b>${esc(String(val))}</b></div>`).join('');
+      $('.ps-x', statsBox).onclick = () => toggleStats(false);
+    };
+    function toggleStats(on) {
+      clearInterval(statsTimer);
+      statsBox.hidden = !on;
+      if (on) { renderStats(); statsTimer = setInterval(() => { if (!document.body.contains(statsBox)) clearInterval(statsTimer); else renderStats(); }, 500); }
+    }
+
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      closePopover();
+      closeCtx();
+      const m = document.createElement('div');
+      m.className = 'ctx-menu';
+      m.id = 'ctxMenu';
+      const items = [
+        ['loop', 'loop', 'Повтор', vid.loop], ['pip', 'pip', 'Мини-проигрыватель'], ['url', 'link', 'Копировать URL видео'],
+        ['urlt', 'link', 'Копировать URL видео с привязкой ко времени'], ['html', 'code', 'Копировать HTML-код'],
+        ['debug', 'bug', 'Скопировать данные для отладки'], ['fix', 'help', 'Решить проблему с воспроизведением'], ['stats', 'info', 'Статистика для сисадминов']
+      ];
+      m.innerHTML = items.map(([k, ic, label, on]) => `<button data-k="${k}"><svg class="ic"><use href="#i-${ic}"/></svg><span>${label}</span>${on ? '<svg class="ic ctx-ok"><use href="#i-check"/></svg>' : ''}</button>`).join('');
+      document.body.appendChild(m);
+      const w = m.offsetWidth, h = m.offsetHeight;
+      m.style.left = Math.max(8, Math.min(e.clientX, window.innerWidth - w - 8)) + 'px';
+      m.style.top = Math.max(8, Math.min(e.clientY, window.innerHeight - h - 8)) + 'px';
+      m.addEventListener('contextmenu', (ev) => ev.preventDefault());
+      m.addEventListener('click', (ev) => {
+        const b = ev.target.closest('[data-k]');
+        if (!b) return;
+        closeCtx();
+        const k = b.dataset.k;
+        if (k === 'loop') { vid.loop = !vid.loop; toast(vid.loop ? 'Повтор включён' : 'Повтор выключен'); }
+        else if (k === 'pip') goPip();
+        else if (k === 'url') copyText(watchUrl(false), 'Ссылка на видео скопирована');
+        else if (k === 'urlt') copyText(watchUrl(true), 'Ссылка с привязкой ко времени скопирована');
+        else if (k === 'html') copyText(`<iframe width="560" height="315" src="${location.origin}/embed/${v.id}" title="${esc(v.title)}" frameborder="0" allow="fullscreen; picture-in-picture" allowfullscreen></iframe>`, 'HTML-код скопирован');
+        else if (k === 'debug') copyText(JSON.stringify(debugInfo(), null, 2), 'Данные для отладки скопированы');
+        else if (k === 'stats') toggleStats(statsBox.hidden);
+        else if (k === 'fix') {
+          openModal(`
+            <div class="modal-head"><div><h2>Проблемы с воспроизведением</h2><p>Попробуйте по порядку — обычно помогает первое или второе.</p></div>
+              <button class="icon-btn" data-close aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button></div>
+            <ol class="fix-list"><li>Нажмите «Перезагрузить видео» ниже.</li><li>Обновите страницу (Ctrl+F5).</li><li>Проверьте интернет-соединение: бесплатный сервер после простоя «просыпается» до минуты.</li><li>Отключите расширения браузера, которые блокируют медиа.</li><li>Если видео в формате MKV/AVI/MOV, браузер может его не поддерживать — лучше загружать MP4 (H.264) или WebM.</li></ol>
+            <div class="modal-actions"><button class="btn" data-close>Закрыть</button><button class="btn btn-primary" id="fixReload">Перезагрузить видео</button></div>`);
+          $('#fixReload').addEventListener('click', () => {
+            const t = vid.currentTime, was = !vid.paused;
+            closeModal();
+            vid.load();
+            vid.addEventListener('loadedmetadata', () => { try { vid.currentTime = t; } catch (e) { /* noop */ } if (was) vid.play().catch(() => {}); }, { once: true });
+            toast('Видео перезагружается…');
+          });
+        }
+      });
+    });
+
+    // горячие клавиши плеера (M — звук, F — экран, I — мини-плеер, ←/→ — перемотка)
+    window.__otPlayerKey = (e) => {
+      const k = e.key.toLowerCase();
+      if (k === 'm') { vid.muted = !vid.muted; return true; }
+      if (k === 'f') { $('#pcFull').click(); return true; }
+      if (k === 'i') { goPip(); return true; }
+      if (e.key === 'ArrowLeft') { vid.currentTime = Math.max(0, vid.currentTime - 5); return true; }
+      if (e.key === 'ArrowRight') { vid.currentTime = Math.min(total() || 1e9, vid.currentTime + 5); return true; }
+      return false;
+    };
 
     recordHistory(v);
   }
