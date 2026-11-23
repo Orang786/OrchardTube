@@ -21,6 +21,8 @@
    `https://<ваш-сервис>.onrender.com` для продакшена. Redirect URI не нужен.
 5. Скопируйте **Client ID** (вида `123…apps.googleusercontent.com`) в переменную `GOOGLE_CLIENT_ID`.
 
+> **Вход с телефона.** Чтобы вход работал на телефонах, в Google Cloud → клиент OAuth → «Разрешённые URI перенаправления» добавьте `https://ВАШ-САЙТ.onrender.com/api/auth/google/redirect` (и `http://localhost:8777/api/auth/google/redirect` для локальной проверки).
+
 ## Деплой на Render
 
 В репозитории есть `render.yaml` (Blueprint). Создайте Blueprint из репозитория и задайте `MONGODB_URI` и

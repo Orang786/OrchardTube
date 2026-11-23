@@ -26,6 +26,8 @@ app.use(auth.sessionMiddleware);
 // Защита от CSRF поверх SameSite=Lax: запросы с изменением данных принимаем только со своего сайта
 app.use((req, res, next) => {
   if (/^(GET|HEAD|OPTIONS)$/.test(req.method)) return next();
+  // вход через Google с телефона приходит формой со страницы Google; защита — токен g_csrf_token (см. ниже)
+  if (req.path === '/api/auth/google/redirect') return next();
   const origin = req.get('origin');
   if (origin) {
     let host = '';
@@ -130,6 +132,21 @@ app.post('/api/auth/google', limited('login', 20, 600e3, 'ip'), wrap(async (req,
   await store.upsertUser(profile);
   auth.setSession(req, res, profile.sub);
   res.json(await store.getMe(profile.sub));
+}));
+
+// Вход через Google в режиме redirect (телефоны): Google делает POST формы сюда
+app.post('/api/auth/google/redirect', limited('login', 20, 600e3, 'ip'), express.urlencoded({ extended: false, limit: '20kb' }), wrap(async (req, res) => {
+  const cookie = /(?:^|;\s*)g_csrf_token=([^;]+)/.exec(req.headers.cookie || '');
+  const body = req.body && req.body.g_csrf_token;
+  if (!cookie || !body || decodeURIComponent(cookie[1]) !== body) return res.redirect(303, '/?login=error');
+  try {
+    const profile = await auth.verifyGoogle(req.body.credential);
+    await store.upsertUser(profile);
+    auth.setSession(req, res, profile.sub);
+    res.redirect(303, '/?login=ok');
+  } catch (e) {
+    res.redirect(303, '/?login=error');
+  }
 }));
 
 app.post('/api/auth/logout', (req, res) => {

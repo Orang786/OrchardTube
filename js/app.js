@@ -1085,6 +1085,21 @@
       return false;
     };
 
+    // Автозапуск при открытии. Браузеры запрещают звук без нажатия на странице:
+    // тогда включаем без звука (как на YouTube) и подсказываем, как включить звук.
+    const tryAutoplay = () => {
+      if (vid.ended || !document.body.contains(vid)) return;
+      const r = vid.play();
+      if (!r || !r.catch) return;
+      r.catch(() => {
+        if (!document.body.contains(vid)) return;
+        vid.muted = true;
+        const r2 = vid.play();
+        if (r2 && r2.then) r2.then(() => toast('Видео запущено без звука — нажмите на динамик, чтобы включить звук')).catch(() => { /* ждём нажатия на ▶ */ });
+      });
+    };
+    tryAutoplay();
+
     recordHistory(v);
   }
 
@@ -1393,7 +1408,14 @@
   }
 
   /* ---------------- рендер ---------------- */
+  // Любая ошибка при отрисовке страницы не должна оставлять белый экран
   function render() {
+    try { renderPage(); } catch (e) {
+      console.error('[render]', e);
+      main.innerHTML = '<div class="empty"><div class="empty-emoji">⚠️</div><h2>Что-то пошло не так</h2><p>Страница не отобразилась. Попробуйте обновить её.</p><button class="btn btn-primary" onclick="location.reload()">Обновить страницу</button> <a class="btn" href="#/">На главную</a></div>';
+    }
+  }
+  function renderPage() {
     closePopover();
     closeModal();
     stopPlayer();
@@ -1744,6 +1766,8 @@
     return true;
   }
 
+  const isTouchDevice = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
+
   function openLogin(reason) {
     openModal(`
       <div class="modal-head">
@@ -1760,7 +1784,14 @@
     loadGsi().then(() => {
       const box = $('#gsiBtn');
       if (!box) return; // окно уже закрыли
-      window.google.accounts.id.initialize({ client_id: api.googleClientId, callback: onGoogleCredential });
+      // На телефонах всплывающее окно Google часто даёт белый экран — там входим через переход на страницу Google и обратно
+      const cfg = { client_id: api.googleClientId, callback: onGoogleCredential };
+      if (isTouchDevice()) {
+        cfg.ux_mode = 'redirect';
+        cfg.login_uri = location.origin + '/api/auth/google/redirect';
+        try { sessionStorage.setItem('ot.ret', location.hash || '#/'); } catch (e) { /* noop */ }
+      }
+      window.google.accounts.id.initialize(cfg);
       window.google.accounts.id.renderButton(box, {
         theme: state.theme === 'dark' ? 'filled_black' : 'outline', size: 'large', text: 'continue_with', shape: 'pill', locale: 'ru', width: 280
       });
@@ -1911,8 +1942,17 @@
       }
       renderAuthUI();
       renderSideChannels();
+      // возвращение со страницы входа Google (телефоны)
+      const lp = new URLSearchParams(location.search).get('login');
+      if (lp) {
+        let ret = '#/';
+        try { ret = sessionStorage.getItem('ot.ret') || '#/'; sessionStorage.removeItem('ot.ret'); } catch (e) { /* noop */ }
+        history.replaceState(null, '', '/' + (/^#\//.test(ret) ? ret : '#/'));
+      }
       render();
       window.addEventListener('hashchange', render);
+      if (lp === 'ok' && me) { if (!me.channel) openChannelModal('create'); else toast(`С возвращением, ${me.channel.name}!`); }
+      else if (lp === 'error') toast('Не удалось войти через Google. Попробуйте ещё раз.');
     });
   }
 
